@@ -80,7 +80,6 @@ class KsElasticMath {
       invariant(sqrtPriceLimitX96 > poolState.sqrtPriceX96, 'RATIO_CURRENT');
     }
     const exactInput = amountSpecified >= ZERO;
-
     const state = {
       amountSpecifiedRemaining: amountSpecified,
       amountCalculated: ZERO,

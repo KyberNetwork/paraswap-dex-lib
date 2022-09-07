@@ -101,7 +101,7 @@ export class KsElastic
 
   async initializePricing(blockNumber: number) {
     // This is only for testing, because cold pool fetching is goes out of
-    // FETCH_POOL_IDENTIFIER_TIMEOUT range
+    // FETCH_POOL_INDENTIFIER_TIMEOUT range
     await Promise.all(
       this.poolsToPreload.map(async pool =>
         Promise.all(
@@ -284,6 +284,7 @@ export class KsElastic
           blockNumber,
         );
       }
+
       if (selectedPools.length === 0) return null;
       const states = await Promise.all(
         selectedPools.map(async pool => {
@@ -298,6 +299,7 @@ export class KsElastic
                 `${this.dexKey}: State is invalid. Generating new one`,
               );
             }
+
             state = await pool.generateState(blockNumber);
             pool.setState(state, blockNumber);
           }
