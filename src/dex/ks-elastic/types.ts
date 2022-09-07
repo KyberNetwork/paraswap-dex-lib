@@ -12,21 +12,12 @@ export type TickInfo = {
   index: number;
 };
 
-export type Slot0 = {
-  sqrtPriceX96: bigint;
-  tick: bigint;
-  observationIndex: number;
-  observationCardinality: number;
-  observationCardinalityNext: number;
-  feeProtocol: bigint;
-};
-
 export type PoolState = {
+  // blockTimestamp: bigint;
   tickSpacing: bigint;
   fee: FeeAmount;
   sqrtPriceX96: bigint;
   liquidity: bigint;
-  // tickList: TickInfo [];
   ticks: Record<NumberAsString, TickInfo>;
   isValid: boolean;
   reinvestLiquidity: bigint;
@@ -68,8 +59,8 @@ export type KsElasticBuyParam = {
 export type KsElasticParam = KsElasticSellParam | KsElasticBuyParam;
 
 export enum KsElasticFunctions {
-  exactInput = 'exactInput',
-  exactOutput = 'exactOutput',
+  exactInput = 'swapExactInput',
+  exactOutput = 'swapExactOutput',
 }
 
 export type TickInfoMappings = {

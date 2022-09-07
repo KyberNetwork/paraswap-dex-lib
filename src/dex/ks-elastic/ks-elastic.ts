@@ -41,8 +41,7 @@ import {
 } from './constants';
 import { DeepReadonly } from 'ts-essentials';
 import { ksElasticMath } from './contract-math/ks-elastic-math';
-import { resolve } from 'path';
-import { Data } from '../aave-v3/types';
+import { PoolNotFoundError } from './errors';
 
 export class KsElastic
   extends SimpleExchange
@@ -92,7 +91,7 @@ export class KsElastic
 
   async initializePricing(blockNumber: number) {
     // This is only for testing, because cold pool fetching is goes out of
-    // FETCH_POOL_IDENTIFIER_TIMEOUT range
+    // FETCH_POOL_INDENTIFIER_TIMEOUT range
     await Promise.all(
       this.poolsToPreload.map(async pool =>
         Promise.all(
@@ -136,13 +135,14 @@ export class KsElastic
         newState = await pool.generateState(blockNumber);
 
         pool.setState(newState, blockNumber);
+
         this.dexHelper.blockManager.subscribeToLogs(
           pool,
           pool.addressesSubscribed,
           blockNumber,
         );
       } catch (e) {
-        if (e instanceof Error && e.message.endsWith('Pool does not exist')) {
+        if (e instanceof PoolNotFoundError) {
           // Pool does not exist for this feeCode, so we can set it to null
           // to prevent more requests for this pool
           pool = null;
@@ -217,7 +217,6 @@ export class KsElastic
         _srcToken,
         _destToken,
       );
-
       if (_srcAddress === _destAddress) return null;
 
       let selectedPools: KsElasticEventPool[] = [];
@@ -243,6 +242,7 @@ export class KsElastic
           blockNumber,
         );
       }
+
       if (selectedPools.length === 0) return null;
       const states = await Promise.all(
         selectedPools.map(async pool => {
@@ -257,6 +257,7 @@ export class KsElastic
                 `${this.dexKey}: State is invalid. Generating new one`,
               );
             }
+
             state = await pool.generateState(blockNumber);
             pool.setState(state, blockNumber);
           }
@@ -267,48 +268,40 @@ export class KsElastic
         side == SwapSide.SELL ? _srcToken.decimals : _destToken.decimals,
       );
 
-      const _amounts = [...amounts.slice(1)];
+      const _amounts = [unitAmount, ...amounts.slice(1)];
 
       const [token0] = this._sortTokens(_srcAddress, _destAddress);
 
       const zeroForOne = token0 === _srcAddress ? true : false;
 
-      const result = await Promise.all(
-        selectedPools.map(async (pool, i) => {
-          const state = states[i];
-
-          const [unit, prices] = await Promise.all([
-            this._getOutputs(state, [unitAmount], zeroForOne, side),
-            this._getOutputs(state, _amounts, zeroForOne, side),
-          ]);
-
-          if (!prices || !unit) {
-            throw new Error('Prices or unit is not calculated');
-          }
-
-          return {
-            unit: unit[0],
-            prices: [0n, ...prices],
-            data: {
-              path: [
-                {
-                  tokenIn: _srcAddress,
-                  tokenOut: _destAddress,
-                  fee: pool.fee.toString(),
-                },
-              ],
-            },
-            poolIdentifier: this.getPoolIdentifier(
-              pool.token0,
-              pool.token1,
-              BigInt(pool.fee),
-            ),
-            exchange: this.dexKey,
-            gasCost: KS_ELASTIC_QUOTE_GASLIMIT,
-            poolAddresses: [pool.poolAddress],
-          };
-        }),
-      );
+      const result = selectedPools.map((pool, i) => {
+        const state = states[i];
+        const prices = this._getOutputs(state, _amounts, zeroForOne, side);
+        if (!prices) {
+          throw new Error('Prices or unit is not calculated');
+        }
+        return {
+          unit: prices[0],
+          prices: prices,
+          data: {
+            path: [
+              {
+                tokenIn: _srcAddress,
+                tokenOut: _destAddress,
+                fee: pool.fee.toString(),
+              },
+            ],
+          },
+          poolIdentifier: this.getPoolIdentifier(
+            pool.token0,
+            pool.token1,
+            BigInt(pool.fee),
+          ),
+          exchange: this.dexKey,
+          gasCost: KS_ELASTIC_QUOTE_GASLIMIT,
+          poolAddresses: [pool.poolAddress],
+        };
+      });
       return result;
     } catch (e) {
       this.logger.error(
@@ -513,20 +506,24 @@ export class KsElastic
     return newConfig;
   }
 
-  private async _getOutputs(
+  private _getOutputs(
     state: DeepReadonly<PoolState>,
     amounts: bigint[],
     zeroForOne: boolean,
     side: SwapSide,
-  ): Promise<bigint[] | null> {
+  ): bigint[] | null {
     try {
-      const outputs = await ksElasticMath.queryOutputs(
-        state,
-        amounts,
-        zeroForOne,
-        side,
-      );
-      return outputs;
+      return amounts.map(amount => {
+        const isSell = side === SwapSide.SELL;
+        const amountSpecified = isSell
+          ? BigInt.asIntN(256, amount)
+          : -BigInt.asIntN(256, amount);
+        return ksElasticMath.getOutputAmountProMM(
+          state,
+          amountSpecified,
+          zeroForOne,
+        );
+      });
     } catch (e) {
       this.logger.error(
         `${this.dexKey}: received error in _getSellOutputs while calculating outputs`,

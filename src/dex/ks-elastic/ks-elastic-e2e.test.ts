@@ -69,8 +69,8 @@ describe('KsElastic E2E', () => {
     const nativeTokenSymbol = NativeTokenSymbols[network];
 
     const tokenAAmount: string = '11111000000';
-    const tokenBAmount: string = '11000000000000000000';
-    const nativeTokenAmount = '11000000000000000000';
+    const tokenBAmount: string = '1000000000000000000';
+    const nativeTokenAmount = '100000000000000000';
 
     const sideToContractMethods = new Map([
       // [SwapSide.SELL, [
@@ -90,7 +90,7 @@ describe('KsElastic E2E', () => {
     sideToContractMethods.forEach((contractMethods, side) =>
       contractMethods.forEach((contractMethod: ContractMethod) => {
         describe(`${contractMethod}`, () => {
-          it.only(`${network} ${side} ${contractMethod} ${nativeTokenSymbol} -> ${tokenASymbol}`, async () => {
+          it(`${network} ${side} ${contractMethod} ${nativeTokenSymbol} -> ${tokenASymbol}`, async () => {
             await testE2E(
               tokens[nativeTokenSymbol],
               tokens[tokenASymbol],
