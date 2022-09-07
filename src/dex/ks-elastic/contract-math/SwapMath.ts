@@ -2,7 +2,7 @@ import { FeeAmount } from '../constants';
 
 import { FullMath } from './FullMath';
 import { Q96, ZERO } from '../internal-constants';
-import { bigIntify } from '../utils';
+import { bigIntify } from '../../../utils';
 
 const BPS = 1000000n;
 const TWO_BPS = BPS + BPS;
@@ -111,9 +111,9 @@ export class SwapMath {
           TWO_BPS * sqrtRatioTargetX96 -
           bigIntify(feePips) * sqrtRatioCurrentX96;
         const numerator = FullMath.mulDiv(
-          bigIntify(liquidity),
-          bigIntify(TWO_BPS * absPriceDiff),
-          bigIntify(denominator),
+          liquidity,
+          TWO_BPS * absPriceDiff,
+          denominator,
         );
         reachAmount = FullMath.mulDiv(numerator, Q96, sqrtRatioCurrentX96);
       } else {
@@ -134,35 +134,19 @@ export class SwapMath {
         const denominator =
           TWO_BPS * sqrtRatioCurrentX96 -
           bigIntify(feePips) * sqrtRatioTargetX96;
-
         let numerator = denominator - bigIntify(feePips) * sqrtRatioCurrentX96;
-        numerator = FullMath.mulDiv(
-          bigIntify(bigIntify(liquidity) << 96n),
-          bigIntify(numerator),
-          bigIntify(denominator),
-        );
+        numerator = FullMath.mulDiv(liquidity << 96n, numerator, denominator);
         reachAmount =
-          FullMath.mulDiv(
-            bigIntify(numerator),
-            bigIntify(absPriceDiff),
-            sqrtRatioCurrentX96,
-          ) / sqrtRatioTargetX96;
+          FullMath.mulDiv(numerator, absPriceDiff, sqrtRatioCurrentX96) /
+          sqrtRatioTargetX96;
         reachAmount = -reachAmount;
       } else {
         const denominator =
           TWO_BPS * sqrtRatioTargetX96 -
           bigIntify(feePips) * sqrtRatioCurrentX96;
         let numerator = denominator - bigIntify(feePips) * sqrtRatioTargetX96;
-        numerator = FullMath.mulDiv(
-          bigIntify(liquidity),
-          bigIntify(numerator),
-          bigIntify(denominator),
-        );
-        reachAmount = FullMath.mulDiv(
-          bigIntify(numerator),
-          bigIntify(absPriceDiff),
-          bigIntify(Q96),
-        );
+        numerator = FullMath.mulDiv(liquidity, numerator, denominator);
+        reachAmount = FullMath.mulDiv(numerator, absPriceDiff, Q96);
         reachAmount = -reachAmount;
       }
     }
@@ -235,7 +219,7 @@ export class SwapMath {
       const tmp1 = FullMath.mulDiv(liquidity, Q96, sqrtRatioCurrentX96);
       const tmp2 = exactIn ? tmp1 + absAmount : tmp1 - absAmount;
       const tmp3 = FullMath.mulDiv(sqrtRatioTargetX96, tmp2, Q96);
-      return tmp3 > liquidity ? tmp3 - liquidity : ZERO;
+      return tmp3 > liquidity ? bigIntify(tmp3) - bigIntify(liquidity) : ZERO;
     } else {
       const tmp1 = FullMath.mulDiv(liquidity, sqrtRatioCurrentX96, Q96);
       const tmp2 = exactIn ? tmp1 + absAmount : tmp1 - absAmount;
