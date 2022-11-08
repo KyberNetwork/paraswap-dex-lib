@@ -35,7 +35,7 @@ export const OUT_OF_RANGE_ERROR_POSTFIX = `INVALID_TICK_BIT_MAP_RANGES`;
  */
 export enum FeeAmount {
   STABLE = 8,
-  LOWEST = 4,
+  LOWEST = 10,
   LOW = 40,
   MEDIUM = 300,
   HIGH = 1000,
@@ -45,7 +45,7 @@ export function ToFeeAmount(fee: number): FeeAmount {
   switch (fee) {
     case 8:
       return FeeAmount.STABLE;
-    case 4:
+    case 10:
       return FeeAmount.LOWEST;
     case 40:
       return FeeAmount.LOW;

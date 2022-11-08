@@ -5,7 +5,7 @@ import invariant from 'tiny-invariant';
 export class TickList {
   public static getTick(ticks: readonly TickInfo[], index: number): TickInfo {
     const tick = ticks[this.binarySearch(ticks, index)];
-    invariant(tick.index === index, 'NOT_CONTAINED');
+    invariant(tick.index == index, 'NOT_CONTAINED');
     return tick;
   }
 
@@ -22,7 +22,7 @@ export class TickList {
       }
       const index = this.nextInitializedTick(ticks, tick, lte).index;
       const nextInitializedTick = Math.max(minimum, index);
-      return [nextInitializedTick, nextInitializedTick === index];
+      return [nextInitializedTick, nextInitializedTick == index];
     } else {
       const maximum = tick + distance;
       if (this.isAtOrAboveLargest(ticks, tick)) {
@@ -30,7 +30,7 @@ export class TickList {
       }
       const index = this.nextInitializedTick(ticks, tick, lte).index;
       const nextInitializedTick = Math.min(maximum, index);
-      return [nextInitializedTick, nextInitializedTick === index];
+      return [nextInitializedTick, nextInitializedTick == index];
     }
   }
 
