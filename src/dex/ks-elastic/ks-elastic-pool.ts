@@ -320,14 +320,11 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
     if (_poolState.locked == false || _poolState.locked == undefined) {
       isValid = true;
     }
-    const tickList = new Array<TickInfo>(newTicks.length);
-    this.setTickList(tickList, newTicks, tickInfosFromContract);
     return <PoolState>{
       tickSpacing,
       fee: this.fee,
       sqrtPriceX96: bigIntify(_poolState.sqrtP),
       liquidity: bigIntify(_liquidityState.baseL),
-      tickList,
       ticks,
       isValid,
       currentTick: bigIntify(currentTick),

@@ -4,8 +4,8 @@ import { FullMath } from './FullMath';
 import { Q96, ZERO } from '../internal-constants';
 import { bigIntify } from '../../../utils';
 
-const BPS = 1000000n;
-const TWO_BPS = BPS + BPS;
+const FEE_UNITS = 100000n;
+const TWO_FEE_UNITS = FEE_UNITS + FEE_UNITS;
 
 export class SwapMath {
   public static computeSwapStepPromm(
@@ -23,8 +23,11 @@ export class SwapMath {
       amountOut: 0n,
       deltaL: 0n,
     };
-    if (sqrtRatioCurrentX96 == sqrtRatioTargetX96)
+
+    if (sqrtRatioCurrentX96 == sqrtRatioTargetX96) {
       return [sqrtRatioCurrentX96, 0n, 0n, 0n];
+    }
+
     let usedAmount = SwapMath.calcReachAmount(
       sqrtRatioCurrentX96,
       sqrtRatioTargetX96,
@@ -33,6 +36,7 @@ export class SwapMath {
       exactIn,
       zeroForOne,
     );
+
     if (
       (exactIn && usedAmount >= amountRemaining) ||
       (!exactIn && usedAmount <= amountRemaining)
@@ -108,22 +112,22 @@ export class SwapMath {
       if (zeroForOne) {
         //exactInput + swap 0 -> 1
         const denominator =
-          TWO_BPS * sqrtRatioTargetX96 -
+          TWO_FEE_UNITS * sqrtRatioTargetX96 -
           bigIntify(feePips) * sqrtRatioCurrentX96;
         const numerator = FullMath.mulDiv(
           liquidity,
-          TWO_BPS * absPriceDiff,
+          TWO_FEE_UNITS * absPriceDiff,
           denominator,
         );
         reachAmount = FullMath.mulDiv(numerator, Q96, sqrtRatioCurrentX96);
       } else {
         //exactInput + swap 1 -> 0
         const denominator =
-          TWO_BPS * sqrtRatioCurrentX96 -
+          TWO_FEE_UNITS * sqrtRatioCurrentX96 -
           bigIntify(feePips) * sqrtRatioTargetX96;
         const numerator = FullMath.mulDiv(
           liquidity,
-          TWO_BPS * absPriceDiff,
+          TWO_FEE_UNITS * absPriceDiff,
           denominator,
         );
         reachAmount = FullMath.mulDiv(numerator, sqrtRatioCurrentX96, Q96);
@@ -132,7 +136,7 @@ export class SwapMath {
       if (zeroForOne) {
         //exactOut + swap 0 -> 1
         const denominator =
-          TWO_BPS * sqrtRatioCurrentX96 -
+          TWO_FEE_UNITS * sqrtRatioCurrentX96 -
           bigIntify(feePips) * sqrtRatioTargetX96;
         let numerator = denominator - bigIntify(feePips) * sqrtRatioCurrentX96;
         numerator = FullMath.mulDiv(liquidity << 96n, numerator, denominator);
@@ -142,7 +146,7 @@ export class SwapMath {
         reachAmount = -reachAmount;
       } else {
         const denominator =
-          TWO_BPS * sqrtRatioTargetX96 -
+          TWO_FEE_UNITS * sqrtRatioTargetX96 -
           bigIntify(feePips) * sqrtRatioCurrentX96;
         let numerator = denominator - bigIntify(feePips) * sqrtRatioTargetX96;
         numerator = FullMath.mulDiv(liquidity, numerator, denominator);
@@ -241,33 +245,35 @@ export class SwapMath {
     let fee = bigIntify(feePips);
     if (exactIn) {
       if (zeroForOne) {
-        // deltaL = feeInBps * absDelta * currentSqrtP / 2
+        // deltaL = feeInFEE_UNITS * absDelta * currentSqrtP / 2
         deltaL = FullMath.mulDiv(
           sqrtRatioCurrentX96,
           absAmount * fee,
-          TWO_BPS << BigInt(96),
+          TWO_FEE_UNITS << BigInt(96),
         );
       } else {
-        // deltaL = feeInBps * absDelta * / (currentSqrtP * 2)
+        // deltaL = feeInFEE_UNITS * absDelta * / (currentSqrtP * 2)
         // Because nextSqrtP = (liquidity + absDelta / currentSqrtP) * currentSqrtP / (liquidity + deltaL)
         // so we round down deltaL, to round up nextSqrtP
         deltaL = FullMath.mulDiv(
           Q96,
           absAmount * fee,
-          TWO_BPS * sqrtRatioCurrentX96,
+          TWO_FEE_UNITS * sqrtRatioCurrentX96,
         );
       }
     } else {
       // obtain the smaller root of the quadratic equation
       // ax^2 - 2bx + c = 0 such that b > 0, and x denotes deltaL
       let a = fee;
-      let b = BPS - fee;
+      let b = FEE_UNITS - fee;
       let c = BigInt(fee) * BigInt(liquidity) * BigInt(absAmount);
       if (zeroForOne) {
-        b = b - FullMath.mulDiv(BPS * absAmount, sqrtRatioCurrentX96, Q96);
+        b =
+          b - FullMath.mulDiv(FEE_UNITS * absAmount, sqrtRatioCurrentX96, Q96);
         c = FullMath.mulDiv(c, sqrtRatioCurrentX96, Q96);
       } else {
-        b = b - FullMath.mulDiv(BPS * absAmount, Q96, sqrtRatioCurrentX96);
+        b =
+          b - FullMath.mulDiv(FEE_UNITS * absAmount, Q96, sqrtRatioCurrentX96);
         c = FullMath.mulDiv(c, Q96, sqrtRatioCurrentX96);
       }
       deltaL = FullMath.getSmallerRootOfQuadEqn(a, b, c);
