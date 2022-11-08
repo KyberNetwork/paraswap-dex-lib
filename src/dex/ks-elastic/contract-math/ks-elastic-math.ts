@@ -138,21 +138,20 @@ class KsElasticMath {
           zeroForOne,
         );
 
-      state.amountSpecifiedRemaining =
-        state.amountSpecifiedRemaining - step.amountIn;
-      state.amountCalculated = state.amountCalculated + step.amountOut;
-      state.reinvestL = state.reinvestL + step.deltaL;
+      state.amountSpecifiedRemaining -= step.amountIn;
+      state.amountCalculated += step.amountOut;
+      state.reinvestL += step.deltaL;
+
       if (state.sqrtPriceX96 == step.sqrtPriceNextX96) {
         if (step.initialized) {
-          let liquidityNet = TickList.getTick(
-            tickList,
-            Number(step.tickNext),
-          ).liquidityNet;
-          if (zeroForOne) liquidityNet = -liquidityNet;
+          let tick = TickList.getTick(tickList, Number(step.tickNext));
+          let liquidityNet = tick.liquidityNet;
+
+          liquidityNet = zeroForOne ? -liquidityNet : liquidityNet;
           state.baseL = LiquidityMath.addDelta(state.baseL, liquidityNet);
         }
         state.tick = zeroForOne ? step.tickNext - 1n : step.tickNext;
-      } else if (state.sqrtPriceX96 != step.sqrtPriceStartX96) {
+      } else {
         state.tick = TickMath.getTickAtSqrtRatio(state.sqrtPriceX96);
       }
     }

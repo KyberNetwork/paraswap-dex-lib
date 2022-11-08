@@ -78,6 +78,7 @@ export class SwapMath {
         zeroForOne,
       );
     }
+
     returnValues.amountOut = SwapMath.calcReturnedAmount(
       sqrtRatioCurrentX96,
       returnValues.sqrtRatioNextX96,
@@ -86,6 +87,7 @@ export class SwapMath {
       exactIn,
       zeroForOne,
     );
+
     return [
       returnValues.sqrtRatioNextX96,
       returnValues.amountIn,
