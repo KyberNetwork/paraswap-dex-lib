@@ -103,15 +103,16 @@ class KsElasticMath {
         deltaL: 0n,
       };
       step.sqrtPriceStartX96 = state.sqrtPriceX96;
-      const result = TickList.nextInitializedTickWithinFixedDistance(
-        tickList,
-        Number(state.tick),
-        zeroForOne,
-        480,
-      );
+      const [ticketNext, initialized] =
+        TickList.nextInitializedTickWithinFixedDistance(
+          tickList,
+          Number(state.tick),
+          zeroForOne,
+          480,
+        );
 
-      step.tickNext = BigInt(result[0]);
-      step.initialized = result[1];
+      step.tickNext = BigInt(ticketNext);
+      step.initialized = initialized;
 
       if (step.tickNext < TickMath.MIN_TICK) {
         step.tickNext = TickMath.MIN_TICK;
@@ -136,6 +137,7 @@ class KsElasticMath {
           exactInput,
           zeroForOne,
         );
+
       state.amountSpecifiedRemaining =
         state.amountSpecifiedRemaining - step.amountIn;
       state.amountCalculated = state.amountCalculated + step.amountOut;
