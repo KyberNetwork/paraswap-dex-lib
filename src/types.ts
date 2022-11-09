@@ -193,6 +193,7 @@ export type PoolPrices<T> = {
   poolIdentifier?: string;
   exchange: string;
   gasCost: number | number[];
+  gasCostL2?: number | number[];
   poolAddresses?: Array<Address>;
 };
 
@@ -274,4 +275,13 @@ export type ExchangeTxInfo = {
 export type PreprocessTransactionOptions = {
   slippageFactor: BigNumber;
   txOrigin: Address;
+  hmac?: string;
+  mockRfqAndLO?: boolean;
+};
+
+export type TransferFeeParams = {
+  srcFee: number;
+  destFee: number;
+  srcDexFee: number;
+  destDexFee: number;
 };

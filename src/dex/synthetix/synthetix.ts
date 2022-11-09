@@ -4,12 +4,14 @@ import {
   Token,
   Address,
   ExchangePrices,
+  PoolPrices,
   AdapterExchangeParam,
   SimpleExchangeParam,
   PoolLiquidity,
   Logger,
 } from '../../types';
 import { SwapSide, Network } from '../../constants';
+import * as CALLDATA_GAS_COST from '../../calldata-gas-cost';
 import { getBigIntPow, getDexKeysWithNetwork, _require } from '../../utils';
 import { IDex } from '../../dex/idex';
 import { IDexHelper } from '../../dex-helper/idex-helper';
@@ -31,6 +33,7 @@ import CombinedSynthetixABI from '../../abi/synthetix/CombinedSynthetix.abi.json
 export class Synthetix extends SimpleExchange implements IDex<SynthetixData> {
   readonly hasConstantPriceLargeAmounts = false;
   readonly needWrapNative = true;
+  readonly isFeeOnTransferSupported = false;
 
   readonly combinedIface: Interface;
 
@@ -46,12 +49,12 @@ export class Synthetix extends SimpleExchange implements IDex<SynthetixData> {
 
   constructor(
     readonly network: Network,
-    protected dexKey: string,
+    dexKey: string,
     readonly dexHelper: IDexHelper,
     protected adapters = Adapters[network] || {},
     readonly config = SynthetixConfig[dexKey][network],
   ) {
-    super(dexHelper.config.data.augustusAddress, dexHelper.web3Provider);
+    super(dexHelper, dexKey);
     this.config = this.normalizeConfig(this.config);
     this.logger = dexHelper.getLogger(dexKey);
     this.combinedIface = new Interface(CombinedSynthetixABI);
@@ -246,6 +249,18 @@ export class Synthetix extends SimpleExchange implements IDex<SynthetixData> {
       );
       return null;
     }
+  }
+
+  // Returns estimated gas cost of calldata for this DEX in multiSwap
+  getCalldataGasCost(poolPrices: PoolPrices<SynthetixData>): number | number[] {
+    return (
+      CALLDATA_GAS_COST.DEX_OVERHEAD +
+      CALLDATA_GAS_COST.LENGTH_SMALL +
+      CALLDATA_GAS_COST.wordNonZeroBytes(8) +
+      CALLDATA_GAS_COST.FULL_WORD +
+      CALLDATA_GAS_COST.FULL_WORD +
+      CALLDATA_GAS_COST.wordNonZeroBytes(1)
+    );
   }
 
   getAdapterParam(

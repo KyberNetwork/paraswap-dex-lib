@@ -1,13 +1,12 @@
 import { Address, UnoptimizedRate } from '../types';
-import { Curve } from './curve';
 import { CurveV2 } from './curve-v2';
 import { IDexTxBuilder, DexContructor, IDex, IRouteOptimizer } from './idex';
 import { Jarvis } from './jarvis';
+import { JarvisV6 } from './jarvis-v6/jarvis-v6';
 import { StablePool } from './stable-pool';
 import { Weth } from './weth/weth';
 import { ZeroX } from './zerox';
-import { UniswapV3 } from './uniswap-v3';
-import { Balancer } from './balancer';
+import { UniswapV3 } from './uniswap-v3/uniswap-v3';
 import { BalancerV2 } from './balancer-v2/balancer-v2';
 import { balancerV2Merge } from './balancer-v2/optimizer';
 import { UniswapV2 } from './uniswap-v2/uniswap-v2';
@@ -44,20 +43,23 @@ import { KsElastic } from './ks-elastic/ks-elastic';
 
 import { ParaSwapLimitOrders } from './paraswap-limit-orders/paraswap-limit-orders';
 import { AugustusRFQOrder } from './augustus-rfq';
-import Web3 from 'web3';
 import { Solidly } from './solidly/solidly';
 import { Velodrome } from './solidly/forks-override/velodrome';
 import { SpiritSwapV2 } from './solidly/forks-override/spiritSwapV2';
 import { Synthetix } from './synthetix/synthetix';
 import { Cone } from './solidly/forks-override/cone';
+import { QuickSwapV3 } from './quickswap-v3';
+import { BalancerV1 } from './balancer-v1/balancer-v1';
+import { balancerV1Merge } from './balancer-v1/optimizer';
+import { CurveV1 } from './curve-v1/curve-v1';
+import { CurveFork } from './curve-v1/forks/curve-forks/curve-forks';
+import { Swerve } from './curve-v1/forks/swerve/swerve';
 
 const LegacyDexes = [
-  Curve,
   CurveV2,
   StablePool,
   Smoothy,
   ZeroX,
-  Balancer,
   Bancor,
   BProtocol,
   MStable,
@@ -67,15 +69,20 @@ const LegacyDexes = [
   OneInchLp,
   DodoV1,
   DodoV2,
-  UniswapV3,
+  QuickSwapV3,
   Jarvis,
   Lido,
   AugustusRFQOrder,
 ];
 
 const Dexes = [
+  CurveV1,
+  CurveFork,
+  Swerve,
+  BalancerV1,
   BalancerV2,
   UniswapV2,
+  UniswapV3,
   BiSwap,
   MDEX,
   Dfyn,
@@ -89,6 +96,7 @@ const Dexes = [
   Nerve,
   Platypus,
   GMX,
+  JarvisV6,
   WooFi,
   ParaSwapLimitOrders,
   Solidly,
@@ -99,11 +107,10 @@ const Dexes = [
   Synthetix,
 ];
 
-export type LegacyDexConstructor = new (
-  augustusAddress: Address,
-  network: number,
-  provider: Web3,
-) => IDexTxBuilder<any, any>;
+export type LegacyDexConstructor = new (dexHelper: IDexHelper) => IDexTxBuilder<
+  any,
+  any
+>;
 
 interface IGetDirectFunctionName {
   getDirectFunctionName?(): string[];
@@ -123,6 +130,7 @@ export class DexAdapterService {
   uniswapV2Alias: string | null;
 
   public routeOptimizers: IRouteOptimizer<UnoptimizedRate>[] = [
+    balancerV1Merge,
     balancerV2Merge,
     uniswapMerge,
   ];
@@ -202,9 +210,7 @@ export class DexAdapterService {
         );
 
       this.dexInstances[_dexKey] = new (DexAdapter as LegacyDexConstructor)(
-        this.dexHelper.config.data.augustusAddress,
-        this.network,
-        this.dexHelper.web3Provider,
+        this.dexHelper,
       );
     }
 
@@ -222,7 +228,7 @@ export class DexAdapterService {
   getDexByKey(key: string): IDex<any, any, any> {
     const _key = key.toLowerCase();
     if (!(_key in this.isLegacy) || this.isLegacy[_key])
-      throw new Error('Invalid Dex Key');
+      throw new Error(`Invalid Dex Key ${key}`);
 
     return this.dexInstances[_key] as IDex<any, any, any>;
   }

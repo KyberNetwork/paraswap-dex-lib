@@ -6,6 +6,7 @@ import {
   PoolPrices,
   ExchangePrices,
   UnoptimizedRate,
+  TransferFeeParams,
 } from './types';
 import {
   SwapSide,
@@ -39,6 +40,16 @@ export class PricingHelper {
       const dexInstance = this.dexAdapterService.getDexByKey(dexKey);
 
       if (!dexInstance.initializePricing) return;
+
+      if (
+        !this.dexAdapterService.dexHelper.config.isSlave &&
+        dexInstance.cacheStateKey
+      ) {
+        this.logger.info(`remove cached state ${dexInstance.cacheStateKey}`);
+        this.dexAdapterService.dexHelper.cache.rawdel(
+          dexInstance.cacheStateKey,
+        );
+      }
 
       return await dexInstance.initializePricing(blockNumber);
     } catch (e) {
@@ -143,6 +154,26 @@ export class PricingHelper {
     );
   }
 
+  getDexsSupportingFeeOnTransfer(): string[] {
+    const allDexKeys = this.dexAdapterService.getAllDexKeys();
+    return allDexKeys
+      .map(dexKey => {
+        try {
+          const dexInstance = this.dexAdapterService.getDexByKey(dexKey);
+          if (dexInstance.isFeeOnTransferSupported) {
+            return dexKey;
+          }
+        } catch (e) {
+          if (
+            !(e instanceof Error && e.message.startsWith(`Invalid Dex Key`))
+          ) {
+            throw e;
+          }
+        }
+      })
+      .filter((d: string | undefined): d is string => !!d);
+  }
+
   public async getPoolPrices(
     from: Token,
     to: Token,
@@ -151,6 +182,13 @@ export class PricingHelper {
     blockNumber: number,
     dexKeys: string[],
     limitPoolsMap: { [key: string]: string[] | null } | null,
+    transferFees: TransferFeeParams = {
+      srcFee: 0,
+      destFee: 0,
+      srcDexFee: 0,
+      destDexFee: 0,
+    },
+    rollupL1ToL2GasRatio?: number,
   ): Promise<PoolPrices<any>[]> {
     const dexPoolPrices = await Promise.all(
       dexKeys.map(async key => {
@@ -176,8 +214,50 @@ export class PricingHelper {
                   side,
                   blockNumber,
                   limitPools ? limitPools : undefined,
+                  transferFees,
                 )
-                .then(resolve, reject)
+                .then(poolPrices => {
+                  try {
+                    if (!poolPrices || !rollupL1ToL2GasRatio) {
+                      return resolve(poolPrices);
+                    }
+                    return resolve(
+                      poolPrices.map(pp => {
+                        pp.gasCostL2 = pp.gasCost;
+                        const gasCostL1 = dexInstance.getCalldataGasCost(pp);
+                        if (
+                          typeof pp.gasCost === 'number' &&
+                          typeof gasCostL1 === 'number'
+                        ) {
+                          pp.gasCost += Math.ceil(
+                            rollupL1ToL2GasRatio * gasCostL1,
+                          );
+                        } else if (
+                          typeof pp.gasCost !== 'number' &&
+                          typeof gasCostL1 !== 'number'
+                        ) {
+                          if (pp.gasCost.length !== gasCostL1.length) {
+                            throw new Error(
+                              `getCalldataGasCost returned wrong array length in dex ${key}`,
+                            );
+                          }
+                          pp.gasCost = pp.gasCost.map(
+                            (g, i) =>
+                              g +
+                              Math.ceil(rollupL1ToL2GasRatio * gasCostL1[i]),
+                          );
+                        } else {
+                          throw new Error(
+                            `getCalldataGasCost returned wrong type in dex ${key}`,
+                          );
+                        }
+                        return pp;
+                      }),
+                    );
+                  } catch (e) {
+                    reject(e);
+                  }
+                }, reject)
                 .finally(() => {
                   clearTimeout(timer);
                 });

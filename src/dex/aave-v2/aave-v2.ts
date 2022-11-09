@@ -3,12 +3,14 @@ import {
   Token,
   Address,
   ExchangePrices,
+  PoolPrices,
   AdapterExchangeParam,
   SimpleExchangeParam,
   PoolLiquidity,
   Logger,
 } from '../../types';
 import { SwapSide, Network, NULL_ADDRESS } from '../../constants';
+import * as CALLDATA_GAS_COST from '../../calldata-gas-cost';
 import { isETHAddress, getDexKeysWithNetwork, getBigIntPow } from '../../utils';
 import { AaveV2Data, AaveV2Param, AaveV2PoolAndWethFunctions } from './types';
 
@@ -52,6 +54,7 @@ export class AaveV2
   implements IDex<AaveV2Data, AaveV2Param>
 {
   readonly hasConstantPriceLargeAmounts = true;
+  readonly isFeeOnTransferSupported = false;
 
   public static dexKeysWithNetwork: { key: string; networks: Network[] }[] =
     getDexKeysWithNetwork(AaveV2Config);
@@ -62,10 +65,10 @@ export class AaveV2
   private wethGateway: Interface;
   constructor(
     protected network: Network,
-    protected dexKey: string,
+    dexKey: string,
     protected dexHelper: IDexHelper,
   ) {
-    super(dexHelper.config.data.augustusAddress, dexHelper.web3Provider);
+    super(dexHelper, dexKey);
     this.logger = dexHelper.getLogger(dexKey);
     this.wethGateway = new Interface(WETH_GATEWAY_ABI[network]);
     this.aavePool = new Interface(AAVE_LENDING_POOL_ABI_V2);
@@ -145,6 +148,15 @@ export class AaveV2
         poolAddresses: [fromAToken ? srcToken.address : destToken.address],
       },
     ];
+  }
+
+  // Returns estimated gas cost of calldata for this DEX in multiSwap
+  getCalldataGasCost(poolPrices: PoolPrices<AaveV2Data>): number | number[] {
+    return (
+      CALLDATA_GAS_COST.DEX_OVERHEAD +
+      CALLDATA_GAS_COST.LENGTH_SMALL +
+      CALLDATA_GAS_COST.ADDRESS
+    );
   }
 
   // Encode params required by the exchange adapter

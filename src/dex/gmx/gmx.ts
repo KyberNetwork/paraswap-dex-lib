@@ -3,12 +3,14 @@ import {
   Token,
   Address,
   ExchangePrices,
+  PoolPrices,
   AdapterExchangeParam,
   SimpleExchangeParam,
   PoolLiquidity,
   Logger,
 } from '../../types';
 import { SwapSide, Network } from '../../constants';
+import * as CALLDATA_GAS_COST from '../../calldata-gas-cost';
 import { getDexKeysWithNetwork, getBigIntPow } from '../../utils';
 import { IDex } from '../../dex/idex';
 import { IDexHelper } from '../../dex-helper/idex-helper';
@@ -29,6 +31,7 @@ export class GMX extends SimpleExchange implements IDex<GMXData> {
 
   readonly hasConstantPriceLargeAmounts = false;
   readonly needWrapNative = true;
+  readonly isFeeOnTransferSupported = false;
 
   public static dexKeysWithNetwork: { key: string; networks: Network[] }[] =
     getDexKeysWithNetwork(GMXConfig);
@@ -41,12 +44,12 @@ export class GMX extends SimpleExchange implements IDex<GMXData> {
 
   constructor(
     protected network: Network,
-    protected dexKey: string,
+    dexKey: string,
     protected dexHelper: IDexHelper,
     protected adapters = Adapters[network],
     protected params: DexParams = GMXConfig[dexKey][network],
   ) {
-    super(dexHelper.config.data.augustusAddress, dexHelper.web3Provider);
+    super(dexHelper, dexKey);
     this.logger = dexHelper.getLogger(dexKey);
   }
 
@@ -69,11 +72,7 @@ export class GMX extends SimpleExchange implements IDex<GMXData> {
       this.logger,
       config,
     );
-    this.dexHelper.blockManager.subscribeToLogs(
-      this.pool,
-      this.pool.addressesSubscribed,
-      blockNumber,
-    );
+    await this.pool.initialize(blockNumber);
   }
 
   // Returns the list of contract adapters (name and index)
@@ -160,6 +159,11 @@ export class GMX extends SimpleExchange implements IDex<GMXData> {
         poolAddresses: [this.params.vault],
       },
     ];
+  }
+
+  // Returns estimated gas cost of calldata for this DEX in multiSwap
+  getCalldataGasCost(poolPrices: PoolPrices<GMXData>): number | number[] {
+    return CALLDATA_GAS_COST.DEX_NO_PAYLOAD;
   }
 
   getAdapterParam(

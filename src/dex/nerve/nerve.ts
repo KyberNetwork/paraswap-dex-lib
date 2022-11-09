@@ -4,6 +4,7 @@ import {
   Token,
   Address,
   ExchangePrices,
+  PoolPrices,
   AdapterExchangeParam,
   SimpleExchangeParam,
   PoolLiquidity,
@@ -11,6 +12,7 @@ import {
 } from '../../types';
 import nervePoolABIDefault from '../../abi/nerve/nerve-pool.json';
 import { SwapSide, Network } from '../../constants';
+import * as CALLDATA_GAS_COST from '../../calldata-gas-cost';
 import { getDexKeysWithNetwork, getBigIntPow } from '../../utils';
 import { IDex } from '../../dex/idex';
 import { IDexHelper } from '../../dex-helper/idex-helper';
@@ -37,6 +39,7 @@ export class Nerve
   protected eventPools: EventPoolMappings = {};
 
   readonly hasConstantPriceLargeAmounts = false;
+  readonly isFeeOnTransferSupported = false;
 
   readonly minConversionRate = '1';
 
@@ -53,13 +56,13 @@ export class Nerve
 
   constructor(
     protected network: Network,
-    protected dexKey: string,
+    dexKey: string,
     protected dexHelper: IDexHelper,
     protected adapters = Adapters[network] || {},
     protected poolConfigs = NerveConfig[dexKey][network].poolConfigs,
     protected nervePoolIface = new Interface(nervePoolABIDefault),
   ) {
-    super(dexHelper.config.data.augustusAddress, dexHelper.web3Provider);
+    super(dexHelper, dexKey);
     this.logger = dexHelper.getLogger(dexKey);
   }
 
@@ -81,13 +84,7 @@ export class Nerve
       this.eventPools[poolIdentifier] = newPool;
 
       // Generate first state for the blockNumber and subscribe to logs
-      const newPoolState = await newPool.generateState(blockNumber);
-      newPool.setState(newPoolState, blockNumber);
-      this.dexHelper.blockManager.subscribeToLogs(
-        newPool,
-        newPool.addressesSubscribed,
-        blockNumber,
-      );
+      await newPool.initialize(blockNumber);
     } else {
       this.logger.warn(
         `We don't support metapools for Nerve. Check config: ${poolConfig.name}`,
@@ -276,6 +273,17 @@ export class Nerve
       this.logger.error(`Error_getPrices:`, e);
       return null;
     }
+  }
+
+  // Returns estimated gas cost of calldata for this DEX in multiSwap
+  getCalldataGasCost(poolPrices: PoolPrices<NerveData>): number | number[] {
+    return (
+      CALLDATA_GAS_COST.DEX_OVERHEAD +
+      CALLDATA_GAS_COST.LENGTH_SMALL +
+      CALLDATA_GAS_COST.INDEX +
+      CALLDATA_GAS_COST.INDEX +
+      CALLDATA_GAS_COST.TIMESTAMP
+    );
   }
 
   getAdapterParam(

@@ -11,6 +11,7 @@ import {
   MultiCallInput,
 } from '../../types';
 import { SwapSide, Network } from '../../constants';
+import * as CALLDATA_GAS_COST from '../../calldata-gas-cost';
 import { getDexKeysWithNetwork, getBigIntPow, isETHAddress } from '../../utils';
 import { IDex } from '../../dex/idex';
 import { IDexHelper } from '../../dex-helper/idex-helper';
@@ -49,6 +50,7 @@ export class Platypus extends SimpleExchange implements IDex<PlatypusData> {
   };
 
   readonly hasConstantPriceLargeAmounts = false;
+  readonly isFeeOnTransferSupported = false;
 
   public static dexKeysWithNetwork: { key: string; networks: Network[] }[] =
     getDexKeysWithNetwork(PlatypusConfig);
@@ -57,11 +59,11 @@ export class Platypus extends SimpleExchange implements IDex<PlatypusData> {
 
   constructor(
     protected network: Network,
-    protected dexKey: string,
+    dexKey: string,
     protected dexHelper: IDexHelper,
     protected adapters = Adapters[network], // TODO: add any additional optional params to support other fork DEXes
   ) {
-    super(dexHelper.config.data.augustusAddress, dexHelper.web3Provider);
+    super(dexHelper, dexKey);
     this.config = PlatypusConfig[dexKey][network];
     this.logger = dexHelper.getLogger(`${dexKey}-${network}`);
   }
@@ -293,15 +295,7 @@ export class Platypus extends SimpleExchange implements IDex<PlatypusData> {
       } else {
         throw new Error(`${this.dexKey} cfgInfo invalid pool type`);
       }
-      await (async <P>(p: P extends PlatypusPoolBase<infer S> ? P : never) => {
-        const state = await p.generateState(blockNumber);
-        p.setState(state, blockNumber);
-      })(pool);
-      this.dexHelper.blockManager.subscribeToLogs(
-        pool,
-        pool.addressesSubscribed,
-        blockNumber,
-      );
+      await pool.initialize(blockNumber);
       eventPools[poolAddress] = pool;
     }
     this.eventPools = eventPools;
@@ -420,6 +414,11 @@ export class Platypus extends SimpleExchange implements IDex<PlatypusData> {
           ),
       )
     ).filter((p): p is PoolPrices<PlatypusData> => !!p);
+  }
+
+  // Returns estimated gas cost of calldata for this DEX in multiSwap
+  getCalldataGasCost(poolPrices: PoolPrices<PlatypusData>): number | number[] {
+    return CALLDATA_GAS_COST.DEX_NO_PAYLOAD;
   }
 
   // Encode params required by the exchange adapter

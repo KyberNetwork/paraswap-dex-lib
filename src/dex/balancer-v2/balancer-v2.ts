@@ -5,6 +5,7 @@ import {
   Token,
   Address,
   ExchangePrices,
+  PoolPrices,
   Log,
   AdapterExchangeParam,
   SimpleExchangeParam,
@@ -20,6 +21,7 @@ import {
   Network,
   SUBGRAPH_TIMEOUT,
 } from '../../constants';
+import * as CALLDATA_GAS_COST from '../../calldata-gas-cost';
 import { StablePool, WeightedPool } from './balancer-v2-pool';
 import { PhantomStablePool } from './PhantomStablePool';
 import { LinearPool } from './LinearPool';
@@ -55,6 +57,17 @@ const fetchAllPools = `query ($count: Int) {
   }
 }`;
 
+const fetchWeightUpdating = `query ($count: Int, $timestampPast: Int, $timestampFuture: Int) {
+  gradualWeightUpdates(
+    first: $count,
+    where: {startTimestamp_lt: $timestampFuture, endTimestamp_gt: $timestampPast }
+  ) {
+    poolId {
+      address
+    }
+  }
+}`;
+
 // These should match the Balancer Pool types available on Subgraph
 enum BalancerPoolTypes {
   Weighted = 'Weighted',
@@ -69,7 +82,9 @@ enum BalancerPoolTypes {
 
 const BALANCER_V2_CHUNKS = 10;
 const MAX_POOL_CNT = 1000; // Taken from SOR
-const POOL_CACHE_TTL = 60 * 60; // 1hr
+const POOL_CACHE_TTL = 60 * 60; // 1 hr
+const POOL_EVENT_DISABLED_TTL = 5 * 60; // 5 min
+const POOL_EVENT_REENABLE_DELAY = 7 * 24 * 60 * 60; // 1 week
 
 function typecastReadOnlyPoolState(pool: DeepReadonly<PoolState>): PoolState {
   return _.cloneDeep(pool) as PoolState;
@@ -89,8 +104,6 @@ export class BalancerV2EventPool extends StatefulEventSubscriber<PoolStateMap> {
   public allPools: SubgraphPoolBase[] = [];
   vaultDecoder: (log: Log) => any;
 
-  addressesSubscribed: string[];
-
   eventSupportedPoolTypes = [
     'Stable',
     'Weighted',
@@ -98,21 +111,24 @@ export class BalancerV2EventPool extends StatefulEventSubscriber<PoolStateMap> {
     'Investment',
   ];
 
-  eventRemovedPools = [
-    // Gradual weight changes are not currently handled in event system
-    // This pool keeps changing weights and is causing pricing issue
-    '0x34809aEDF93066b49F638562c42A9751eDb36DF5',
-  ].map(s => s.toLowerCase());
+  eventRemovedPools = (
+    [
+      // Gradual weight changes are not currently handled in event system
+      // This pool keeps changing weights and is causing pricing issue
+      // But should now be handled by eventDisabledPools so don't need here!
+      //'0x34809aEDF93066b49F638562c42A9751eDb36DF5',
+    ] as Address[]
+  ).map(s => s.toLowerCase());
 
   constructor(
-    protected parentName: string,
+    parentName: string,
     protected network: number,
     protected vaultAddress: Address,
     protected subgraphURL: string,
     protected dexHelper: IDexHelper,
     logger: Logger,
   ) {
-    super(parentName, logger);
+    super(parentName, vaultAddress, dexHelper, logger);
     this.vaultInterface = new Interface(VaultABI);
     const weightedPool = new WeightedPool(
       this.vaultAddress,
@@ -353,6 +369,7 @@ export class BalancerV2
   protected eventPools: BalancerV2EventPool;
 
   readonly hasConstantPriceLargeAmounts = false;
+  readonly isFeeOnTransferSupported = false;
 
   public static dexKeysWithNetwork: { key: string; networks: Network[] }[] =
     getDexKeysWithNetwork(BalancerConfig);
@@ -362,16 +379,19 @@ export class BalancerV2
   // In memory pool state for non-event pools
   nonEventPoolStateCache: PoolStateCache;
 
+  eventDisabledPoolsTimer?: NodeJS.Timer;
+  eventDisabledPools: Address[] = [];
+
   constructor(
     protected network: Network,
-    protected dexKey: string,
+    dexKey: string,
     protected dexHelper: IDexHelper,
     protected vaultAddress: Address = BalancerConfig[dexKey][network]
       .vaultAddress,
     protected subgraphURL: string = BalancerConfig[dexKey][network].subgraphURL,
     protected adapters = Adapters[network],
   ) {
-    super(dexHelper.config.data.augustusAddress, dexHelper.web3Provider);
+    super(dexHelper, dexKey);
     // Initialise cache - this will hold pool state of non-event pools in memory to be reused if block hasn't expired
     this.nonEventPoolStateCache = { blockNumber: 0, poolState: {} };
     this.logger = dexHelper.getLogger(dexKey);
@@ -386,17 +406,84 @@ export class BalancerV2
   }
 
   async setupEventPools(blockNumber: number) {
-    const poolState = await this.eventPools.generateState(blockNumber);
-    this.eventPools.setState(poolState, blockNumber);
-    this.dexHelper.blockManager.subscribeToLogs(
-      this.eventPools,
-      this.eventPools.addressesSubscribed,
-      blockNumber,
+    await this.eventPools.initialize(blockNumber);
+  }
+
+  async fetchEventDisabledPools() {
+    const cacheKey = 'eventDisabledPools';
+    const poolAddressListFromCache = await this.dexHelper.cache.get(
+      this.dexKey,
+      this.network,
+      cacheKey,
+    );
+    if (poolAddressListFromCache) {
+      this.eventDisabledPools = JSON.parse(poolAddressListFromCache);
+      return;
+    }
+    this.logger.info(
+      `Fetching ${this.dexKey}_${this.network} Weight Updates from subgraph`,
+    );
+    const timeNow = Math.floor(Date.now() / 1000);
+    const variables = {
+      count: MAX_POOL_CNT,
+      timestampPast: timeNow - POOL_EVENT_REENABLE_DELAY,
+      timestampFuture: timeNow + POOL_EVENT_DISABLED_TTL,
+    };
+    const { data } = await this.dexHelper.httpRequest.post(
+      this.subgraphURL,
+      { query: fetchWeightUpdating, variables },
+      SUBGRAPH_TIMEOUT,
+    );
+
+    if (!(data && data.gradualWeightUpdates)) {
+      throw new Error(
+        `${this.dexKey}_${this.network} failed to fetch weight updates from subgraph`,
+      );
+    }
+
+    this.eventDisabledPools = _.uniq(
+      data.gradualWeightUpdates.map(
+        (wu: { poolId: { address: Address } }) => wu.poolId.address,
+      ),
+    );
+    const poolAddressList = JSON.stringify(this.eventDisabledPools);
+    this.logger.info(
+      `Pools blocked from event based on ${this.dexKey}_${this.network}: ${poolAddressList}`,
+    );
+    this.dexHelper.cache.setex(
+      this.dexKey,
+      this.network,
+      cacheKey,
+      POOL_EVENT_DISABLED_TTL,
+      poolAddressList,
     );
   }
 
   async initializePricing(blockNumber: number) {
+    if (!this.eventDisabledPoolsTimer) {
+      await this.fetchEventDisabledPools();
+      this.eventDisabledPoolsTimer = setInterval(async () => {
+        try {
+          await this.fetchEventDisabledPools();
+        } catch (e) {
+          this.logger.error(
+            `${this.dexKey}: Failed to update event disabled pools:`,
+            e,
+          );
+        }
+      }, POOL_EVENT_DISABLED_TTL * 1000);
+    }
     await this.setupEventPools(blockNumber);
+  }
+
+  releaseResources(): void {
+    if (this.eventDisabledPoolsTimer) {
+      clearInterval(this.eventDisabledPoolsTimer);
+      this.eventDisabledPoolsTimer = undefined;
+      this.logger.info(
+        `${this.dexKey}: cleared eventDisabledPoolsTimer before shutting down`,
+      );
+    }
   }
 
   getPools(from: Token, to: Token): SubgraphPoolBase[] {
@@ -490,11 +577,12 @@ export class BalancerV2
         (side === SwapSide.SELL ? _from : _to).decimals,
       );
 
-      const eventPoolStates = await this.eventPools.getState(blockNumber);
-      if (!eventPoolStates) {
+      const eventPoolStatesRO = await this.eventPools.getState(blockNumber);
+      if (!eventPoolStatesRO) {
         this.logger.error(`getState returned null`);
-        return null;
       }
+      const eventPoolStates = { ...(eventPoolStatesRO || {}) };
+      for (const addr of this.eventDisabledPools) delete eventPoolStates[addr];
 
       // Fetch previously cached non-event pool states
       let nonEventPoolStates = this.getNonEventPoolStateCache(blockNumber);
@@ -574,6 +662,55 @@ export class BalancerV2
       );
       return null;
     }
+  }
+
+  // Returns estimated gas cost of calldata for this DEX in multiSwap
+  getCalldataGasCost(
+    poolPrices: PoolPrices<BalancerV2Data>,
+  ): number | number[] {
+    return (
+      CALLDATA_GAS_COST.DEX_OVERHEAD +
+      CALLDATA_GAS_COST.LENGTH_LARGE +
+      // ParentStruct header
+      CALLDATA_GAS_COST.OFFSET_SMALL +
+      // ParentStruct -> swaps[] header
+      CALLDATA_GAS_COST.OFFSET_LARGE +
+      // ParentStruct -> assets[] header
+      CALLDATA_GAS_COST.OFFSET_LARGE +
+      // ParentStruct -> funds
+      CALLDATA_GAS_COST.ADDRESS +
+      CALLDATA_GAS_COST.BOOL +
+      CALLDATA_GAS_COST.ADDRESS +
+      CALLDATA_GAS_COST.BOOL +
+      // ParentStruct -> limits[] header
+      CALLDATA_GAS_COST.OFFSET_LARGE +
+      // ParentStruct -> deadline
+      CALLDATA_GAS_COST.TIMESTAMP +
+      // ParentStruct -> swaps[]
+      CALLDATA_GAS_COST.LENGTH_SMALL +
+      // ParentStruct -> swaps[0] header
+      CALLDATA_GAS_COST.OFFSET_SMALL +
+      // ParentStruct -> swaps[0] -> poolId
+      CALLDATA_GAS_COST.FULL_WORD +
+      // ParentStruct -> swaps[0] -> assetInIndex
+      CALLDATA_GAS_COST.INDEX +
+      // ParentStruct -> swaps[0] -> assetOutIndex
+      CALLDATA_GAS_COST.INDEX +
+      // ParentStruct -> swaps[0] -> amount
+      CALLDATA_GAS_COST.AMOUNT +
+      // ParentStruct -> swaps[0] -> userData header
+      CALLDATA_GAS_COST.OFFSET_SMALL +
+      // ParentStruct -> swaps[0] -> userData
+      CALLDATA_GAS_COST.ZERO +
+      // ParentStruct -> assets[]
+      CALLDATA_GAS_COST.LENGTH_SMALL +
+      // ParentStruct -> assets[0:2]
+      CALLDATA_GAS_COST.ADDRESS * 2 +
+      // ParentStruct -> limits[]
+      CALLDATA_GAS_COST.LENGTH_SMALL +
+      // ParentStruct -> limits[0:2]
+      CALLDATA_GAS_COST.FULL_WORD * 2
+    );
   }
 
   getAdapterParam(
