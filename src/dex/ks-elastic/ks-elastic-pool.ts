@@ -58,7 +58,7 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
   private isSetPoolContract: boolean | false;
 
   constructor(
-    protected parentName: string,
+    parentName: string,
     protected network: number,
     readonly dexHelper: IDexHelper,
     logger: Logger,
@@ -68,12 +68,19 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
     token0: Address,
     token1: Address,
     multiCallAddress: Address,
-
     readonly reinvestLiquidity: bigint,
+    mapKey: string = '',
 
     readonly poolIface = new Interface(PoolInstanceABI),
   ) {
-    super(`${parentName}_${token0}_${token1}_pool`, logger);
+    super(
+      parentName,
+      `${token0}_${token1}_${fee}`,
+      dexHelper,
+      logger,
+      true,
+      mapKey,
+    );
     this.token0 = token0.toLowerCase();
     this.token1 = token1.toLowerCase();
     this.logDecoder = (log: Log) => this.poolIface.parseLog(log);
@@ -113,6 +120,18 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
 
   set poolAddress(address: Address) {
     this._poolAddress = address;
+  }
+
+  protected async processBlockLogs(
+    state: DeepReadonly<PoolState>,
+    logs: Readonly<Log>[],
+    blockHeader: Readonly<BlockHeader>,
+  ): Promise<DeepReadonly<PoolState> | null> {
+    const newState = await super.processBlockLogs(state, logs, blockHeader);
+    if (newState && !newState.isValid) {
+      return await this.generateState(blockHeader.number);
+    }
+    return newState;
   }
 
   protected processLog(
@@ -267,28 +286,6 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
     ).flat();
   }
 
-  setTickList(
-    tickList: Array<TickInfo>,
-    tickArray: number[],
-    tickInfoFromContract: any[],
-  ) {
-    tickInfoFromContract.forEach((element, index) => {
-      tickList[index] = {
-        liquidityGross: bigIntify(element.liquidityGross),
-        liquidityNet: bigIntify(element.liquidityNet),
-        tickCumulativeOutside: bigIntify(element.feeGrowthOutside),
-        secondsPerLiquidityOutsideX128: bigIntify(
-          element.secondsPerLiquidityOutside,
-        ),
-        secondsOutside: bigIntify(
-          element.liquidityNet * element.secondsPerLiquidityOutside,
-        ),
-        initialized: true,
-        index: tickArray[index],
-      };
-    });
-  }
-
   async generateState(blockNumber: number): Promise<Readonly<PoolState>> {
     // TODO: Should be handle it first before processing other logics
     // Cache pool contract for next process
@@ -321,6 +318,7 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
       isValid = true;
     }
     return <PoolState>{
+      pool: this.poolAddress,
       tickSpacing,
       fee: this.fee,
       sqrtPriceX96: bigIntify(_poolState.sqrtP),
