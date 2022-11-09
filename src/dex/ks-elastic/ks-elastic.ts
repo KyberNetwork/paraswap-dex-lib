@@ -10,6 +10,7 @@ import {
   PoolLiquidity,
   Logger,
   NumberAsString,
+  PoolPrices,
 } from '../../types';
 import { SwapSide, Network } from '../../constants';
 import {
@@ -28,6 +29,8 @@ import {
   KsElasticParam,
 } from './types';
 import { SimpleExchange } from '../simple-exchange';
+import * as CALLDATA_GAS_COST from '../../calldata-gas-cost';
+
 import { KsElasticConfig, Adapters, PoolsToPreload } from './config';
 import { KsElasticEventPool } from './ks-elastic-pool';
 import KsElasticRouterABI from '../../abi/ks-elastic/Router.json';
@@ -42,11 +45,18 @@ import { DeepReadonly } from 'ts-essentials';
 import { ksElasticMath } from './contract-math/ks-elastic-math';
 import { PoolNotFoundError } from './errors';
 
+type PoolPairsInfo = {
+  token0: Address;
+  token1: Address;
+  fee: string;
+};
+
 export class KsElastic
   extends SimpleExchange
   implements IDex<KsElasticData, KsElasticParam>
 {
   readonly eventPools: Record<string, KsElasticEventPool | null> = {};
+  readonly isFeeOnTransferSupported: boolean = false;
 
   readonly hasConstantPriceLargeAmounts = false;
   readonly needWrapNative = true;
@@ -58,14 +68,14 @@ export class KsElastic
 
   constructor(
     protected network: Network,
-    protected dexKey: string,
+    dexKey: string,
     protected dexHelper: IDexHelper,
     protected adapters = Adapters[network] || {},
     readonly routerIface = new Interface(KsElasticRouterABI),
     protected config = KsElasticConfig[dexKey][network],
     protected poolsToPreload = PoolsToPreload[dexKey][network] || [],
   ) {
-    super(dexHelper.config.data.augustusAddress, dexHelper.web3Provider);
+    super(dexHelper, dexKey);
     this.logger = dexHelper.getLogger(dexKey);
 
     // To receive revert reasons
@@ -114,7 +124,17 @@ export class KsElastic
       ];
     if (pool === undefined) {
       const [token0, token1] = this._sortTokens(srcAddress, destAddress);
-
+      const key = `${token0}_${token1}_${fee}`.toLowerCase();
+      await this.dexHelper.cache.hset(
+        this.dexmapKey,
+        key,
+        JSON.stringify({
+          token0,
+          token1,
+          fee: fee.toString(),
+        }),
+      );
+      this.logger.trace(`starting to listen to new pool: ${key}`);
       pool = new KsElasticEventPool(
         this.dexKey,
         this.network,
@@ -127,19 +147,17 @@ export class KsElastic
         token1,
         this.config.multiCall,
         0n,
+        this.cacheStateKey,
       );
 
-      let newState;
       try {
-        newState = await pool.generateState(blockNumber);
-
-        pool.setState(newState, blockNumber);
-
-        this.dexHelper.blockManager.subscribeToLogs(
-          pool,
-          pool.addressesSubscribed,
-          blockNumber,
-        );
+        await pool.initialize(blockNumber, {
+          initCallback: (state: DeepReadonly<PoolState>) => {
+            //really hacky, we need to push poolAddress so that we subscribeToLogs in StatefulEventSubscriber
+            pool!.addressesSubscribed[0] = state.pool;
+            pool!.poolAddress = state.pool;
+          },
+        });
       } catch (e) {
         if (e instanceof PoolNotFoundError) {
           // Pool does not exist for this feeCode, so we can set it to null
@@ -165,7 +183,31 @@ export class KsElastic
     }
     return pool;
   }
+  async addMasterPool(poolKey: string, blockNumber: number): Promise<boolean> {
+    this.logger.warn(`addMasterPool ${this.dexmapKey} ${poolKey}`);
+    const _pairs = await this.dexHelper.cache.hget(this.dexmapKey, poolKey);
+    if (!_pairs) {
+      this.logger.warn(
+        `did not find poolconfig in for key ${this.dexmapKey} ${poolKey}`,
+      );
+      return false;
+    }
 
+    const poolInfo: PoolPairsInfo = JSON.parse(_pairs);
+
+    const pool = await this.getPool(
+      poolInfo.token0,
+      poolInfo.token1,
+      ToFeeAmount(Number(poolInfo.fee)),
+      blockNumber,
+    );
+
+    if (!pool) {
+      return false;
+    }
+
+    return true;
+  }
   async getPoolIdentifiers(
     srcToken: Token,
     destToken: Token,
@@ -312,7 +354,30 @@ export class KsElastic
       return null;
     }
   }
-
+  getCalldataGasCost(poolPrices: PoolPrices<KsElasticData>): number | number[] {
+    const gasCost =
+      CALLDATA_GAS_COST.DEX_OVERHEAD +
+      CALLDATA_GAS_COST.LENGTH_SMALL +
+      // ParentStruct header
+      CALLDATA_GAS_COST.OFFSET_SMALL +
+      // ParentStruct -> path header
+      CALLDATA_GAS_COST.OFFSET_SMALL +
+      // ParentStruct -> deadline
+      CALLDATA_GAS_COST.TIMESTAMP +
+      // ParentStruct -> path (20+3+20 = 43 = 32+11 bytes)
+      CALLDATA_GAS_COST.LENGTH_SMALL +
+      CALLDATA_GAS_COST.FULL_WORD +
+      CALLDATA_GAS_COST.wordNonZeroBytes(11);
+    const arr = new Array(poolPrices.prices.length);
+    poolPrices.prices.forEach((p, index) => {
+      if (p == 0n) {
+        arr[index] = 0;
+      } else {
+        arr[index] = gasCost;
+      }
+    });
+    return arr;
+  }
   getAdapterParam(
     srcToken: string,
     destToken: string,

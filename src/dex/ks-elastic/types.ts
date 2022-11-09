@@ -14,6 +14,7 @@ export type TickInfo = {
 
 export type PoolState = {
   // blockTimestamp: bigint;
+  pool: string;
   tickSpacing: bigint;
   fee: FeeAmount;
   sqrtPriceX96: bigint;
