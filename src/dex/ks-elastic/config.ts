@@ -5,8 +5,14 @@ import { FeeAmount } from './constants';
 
 import { Address } from 'paraswap';
 
-// const SUPPORTED_FEES = [FeeAmount.HIGH, FeeAmount.MEDIUM, FeeAmount.LOW, FeeAmount.STABLE, FeeAmount.LOWEST];
-const SUPPORTED_FEES = [FeeAmount.MEDIUM];
+const SUPPORTED_FEES = [
+  FeeAmount.HIGH,
+  FeeAmount.MEDIUM,
+  FeeAmount.LOW,
+  FeeAmount.STABLE,
+  FeeAmount.LOWEST,
+];
+// const SUPPORTED_FEES = [FeeAmount.MEDIUM];
 
 // Pools tha will be initialized on app startup
 // They are added for testing

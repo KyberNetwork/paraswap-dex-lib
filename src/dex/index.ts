@@ -54,6 +54,8 @@ import { balancerV1Merge } from './balancer-v1/optimizer';
 import { CurveV1 } from './curve-v1/curve-v1';
 import { CurveFork } from './curve-v1/forks/curve-forks/curve-forks';
 import { Swerve } from './curve-v1/forks/swerve/swerve';
+import { SwaapV1 } from './swaap-v1/swaap-v1';
+import { WstETH } from './wsteth/wsteth';
 
 const LegacyDexes = [
   CurveV2,
@@ -105,6 +107,8 @@ const Dexes = [
   KsElastic,
   Cone,
   Synthetix,
+  SwaapV1,
+  WstETH,
 ];
 
 export type LegacyDexConstructor = new (dexHelper: IDexHelper) => IDexTxBuilder<

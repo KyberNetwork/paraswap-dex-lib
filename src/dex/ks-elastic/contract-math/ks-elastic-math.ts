@@ -11,32 +11,10 @@ import { TickMath } from './TickMath';
 import { _require } from '../../../utils';
 import { DeepReadonly } from 'ts-essentials';
 import { NumberAsString, SwapSide } from 'paraswap-core';
-import { OUT_OF_RANGE_ERROR_POSTFIX } from '../constants';
-import { setImmediatePromise } from '../utils';
-
 type ModifyPositionParams = {
   tickLower: bigint;
   tickUpper: bigint;
   liquidityDelta: bigint;
-};
-
-type PriceComputationState = {
-  amountSpecifiedRemaining: bigint;
-  amountCalculated: bigint;
-  sqrtPriceX96: bigint;
-  tick: bigint;
-  protocolFee: bigint;
-  liquidity: bigint;
-  isFirstCycleState: boolean;
-};
-
-type PriceComputationCache = {
-  liquidityStart: bigint;
-  // blockTimestamp: bigint;
-  feeProtocol: bigint;
-  secondsPerLiquidityCumulativeX128: bigint;
-  tickCumulative: bigint;
-  computedLatestObservation: boolean;
 };
 
 class KsElasticMath {
@@ -44,12 +22,14 @@ class KsElasticMath {
     poolState: DeepReadonly<PoolState>,
     inputAmount: bigint,
     zeroForOne: boolean,
+    isSell: boolean,
     sqrtPriceLimitX96?: bigint | 0n,
   ): bigint {
     const amountOut = this.swapProMM(
       poolState,
       zeroForOne,
       inputAmount,
+      isSell,
       sqrtPriceLimitX96,
     );
     return -amountOut;
@@ -59,6 +39,7 @@ class KsElasticMath {
     poolState: PoolState,
     zeroForOne: boolean,
     amountSpecified: bigint,
+    isSell: boolean,
     sqrtPriceLimitX96?: bigint | 0n,
   ): bigint {
     const tickList = initTickList(poolState.ticks);
@@ -79,6 +60,9 @@ class KsElasticMath {
       invariant(sqrtPriceLimitX96 < TickMath.MAX_SQRT_RATIO, 'RATIO_MAX');
       invariant(sqrtPriceLimitX96 > poolState.sqrtPriceX96, 'RATIO_CURRENT');
     }
+    if (poolState.sqrtPriceX96 < 0n) {
+      console.log('PoolState====', poolState);
+    }
     const exactInput = amountSpecified >= ZERO;
     const state = {
       amountSpecifiedRemaining: amountSpecified,
@@ -88,6 +72,7 @@ class KsElasticMath {
       sqrtPriceX96: poolState.sqrtPriceX96,
       tick: poolState.currentTick,
     };
+
     while (
       state.amountSpecifiedRemaining != ZERO &&
       state.sqrtPriceX96 != sqrtPriceLimitX96
@@ -142,20 +127,28 @@ class KsElasticMath {
       state.amountCalculated += step.amountOut;
       state.reinvestL += step.deltaL;
 
-      if (state.sqrtPriceX96 == step.sqrtPriceNextX96) {
-        if (step.initialized) {
-          let tick = TickList.getTick(tickList, Number(step.tickNext));
-          let liquidityNet = tick.liquidityNet;
-
-          liquidityNet = zeroForOne ? -liquidityNet : liquidityNet;
-          state.baseL = LiquidityMath.addDelta(state.baseL, liquidityNet);
-        }
-        state.tick = zeroForOne ? step.tickNext - 1n : step.tickNext;
-      } else {
+      if (state.sqrtPriceX96 !== step.sqrtPriceNextX96) {
         state.tick = TickMath.getTickAtSqrtRatio(state.sqrtPriceX96);
+        break;
       }
+      if (step.initialized) {
+        let tick = TickList.getTick(tickList, Number(step.tickNext));
+        let liquidityNet = tick.liquidityNet;
+
+        liquidityNet = zeroForOne ? -liquidityNet : liquidityNet;
+        state.baseL = LiquidityMath.addDelta(state.baseL, liquidityNet);
+      }
+      state.tick = zeroForOne ? step.tickNext - 1n : step.tickNext;
     }
-    return state.amountCalculated;
+    if (isSell)
+      return BigInt.asUintN(
+        256,
+        -(zeroForOne ? state.amountSpecifiedRemaining : state.amountCalculated),
+      );
+
+    return zeroForOne
+      ? BigInt.asUintN(256, state.amountCalculated)
+      : BigInt.asUintN(256, state.amountSpecifiedRemaining);
   }
 
   swapFromEvent(
