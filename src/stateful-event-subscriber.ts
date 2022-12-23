@@ -3,7 +3,10 @@ import { Log, Logger } from './types';
 import { BlockHeader } from 'web3-eth';
 import { EventSubscriber } from './dex-helper/iblock-manager';
 
-import { MAX_BLOCKS_HISTORY } from './constants';
+import {
+  MAX_BLOCKS_HISTORY,
+  STATEFUL_EVENT_SUBSCRIBER_LOG_BATCH_PERIOD,
+} from './constants';
 import { IDexHelper } from './dex-helper';
 import { Utils } from './utils';
 
@@ -12,12 +15,10 @@ type StateCache<State> = {
   state: DeepReadonly<State>;
 };
 
-type InitializeStateOptions<State> = {
+export type InitializeStateOptions<State> = {
   state?: DeepReadonly<State>;
   initCallback?: (state: DeepReadonly<State>) => void;
 };
-
-const CREATE_NEW_STATE_RETRY_INTERVAL_MS = 1000;
 
 export abstract class StatefulEventSubscriber<State>
   implements EventSubscriber
@@ -36,9 +37,18 @@ export abstract class StatefulEventSubscriber<State>
   isTracking: () => boolean = () => false;
   public addressesSubscribed: string[] = [];
 
-  private cacheName: string;
+  public cacheName: string;
 
   public name: string;
+
+  public isInitialized = false;
+
+  private _aggregatedLogMessages: Record<
+    string,
+    { count: number; level: 'warn' | 'info' }
+  > = {};
+
+  private _lastPublishedTimeMs: number = 0;
 
   constructor(
     public readonly parentName: string,
@@ -46,7 +56,7 @@ export abstract class StatefulEventSubscriber<State>
     protected dexHelper: IDexHelper,
     protected logger: Logger,
     private masterPoolNeeded: boolean = false,
-    private mapKey: string = '',
+    public mapKey: string = '',
   ) {
     this.name = _name.toLowerCase();
     this.cacheName = `${this.mapKey}_${this.name}`.toLowerCase();
@@ -152,6 +162,7 @@ export abstract class StatefulEventSubscriber<State>
       this.addressesSubscribed,
       masterBn || blockNumber,
     );
+    this.isInitialized = true;
   }
 
   //Function which transforms the given state for the given log event.
@@ -362,7 +373,7 @@ export abstract class StatefulEventSubscriber<State>
         this.name,
         (result: string | null) => {
           if (!result) {
-            this.logger.warn('received null result');
+            this._logBatchTypicalMessages(`received null result`, 'warn');
             return false;
           }
           const state: StateCache<State> = Utils.Parse(result);
@@ -395,6 +406,37 @@ export abstract class StatefulEventSubscriber<State>
         state,
       }),
     );
+  }
+
+  // This is really very limited log aggregator function used in one place (currently)
+  // If you consider using this, be careful to not pass custom message as they won't be
+  // aggregated. And don't pass same message with different log levels. It will lead
+  // to inconsistent log level choice
+  _logBatchTypicalMessages(
+    message: string,
+    level: 'warn' | 'info',
+    publishPeriod: number = STATEFUL_EVENT_SUBSCRIBER_LOG_BATCH_PERIOD,
+  ) {
+    const now = Date.now();
+    if (now - this._lastPublishedTimeMs > publishPeriod) {
+      this._lastPublishedTimeMs = now;
+      Object.entries(this._aggregatedLogMessages).forEach(
+        ([message, aggregated]) => {
+          this.logger[aggregated.level](
+            `${message} (${aggregated.count}) counts`,
+          );
+        },
+      );
+      this._aggregatedLogMessages = {};
+    } else {
+      if (this._aggregatedLogMessages[message] === undefined) {
+        this._aggregatedLogMessages[message] = {
+          count: 0,
+          level,
+        };
+      }
+      this._aggregatedLogMessages[message].count++;
+    }
   }
 
   //Saves the state into the stateHistory, and cleans up any old state that is

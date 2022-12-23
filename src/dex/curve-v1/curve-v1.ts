@@ -17,11 +17,11 @@ import {
   Network,
   NULL_ADDRESS,
   SRC_TOKEN_PARASWAP_TRANSFERS,
+  ETHER_ADDRESS,
   SwapSide,
 } from '../../constants';
 import * as CALLDATA_GAS_COST from '../../calldata-gas-cost';
-import StableSwapBBTC from '../../abi/curve/StableSwapBBTC.json';
-import FactoryRegistryABI from '../../abi/curve/FactoryRegistry.json';
+import StableSwapBBTC from '../../abi/curve-v1/StableSwapBBTC.json';
 import { CurvePool } from './pools/curve-pool';
 import { CurveMetapool } from './pools/curve-metapool';
 import { ThreePool, address as ThreePoolAddress } from './pools/3pool';
@@ -54,19 +54,16 @@ import {
   getBigIntPow,
   getDexKeysWithNetwork,
   interpolate,
+  isDestTokenTransferFeeToBeExchanged,
   isSrcTokenTransferFeeToBeExchanged,
   Utils,
 } from '../../utils';
-import { BN_0, getBigNumberPow } from '../../bignumber-constants';
+import { BN_0 } from '../../bignumber-constants';
 import { SimpleExchange } from '../simple-exchange';
 import { IDex } from '../idex';
 import { IDexHelper } from '../../dex-helper';
 import { Logger } from 'log4js';
-import {
-  uin128DecodeToInt,
-  uin256DecodeToFloat,
-  uin256DecodeToNumber,
-} from '../../lib/decoders';
+import { uin128DecodeToInt, uin256DecodeToFloat } from '../../lib/decoders';
 import { getManyPoolStates } from './pools/getstate-multicall';
 import { MultiCallParams, MultiResult } from '../../lib/multi-wrapper';
 import {
@@ -75,7 +72,6 @@ import {
   TokenWithReasonableVolume,
   CurveSwapFunctions,
 } from './types';
-import { ETHER_ADDRESS } from 'paraswap';
 import { erc20Iface } from '../../lib/utils-interfaces';
 import { applyTransferFee } from '../../lib/token-transfer-fee';
 
@@ -92,7 +88,6 @@ export class CurveV1 extends SimpleExchange implements IDex<CurveV1Data> {
 
   eventPools = new Array<CurvePool | CurveMetapool>();
   public poolInterface: Interface;
-  protected factoryInterface: Interface;
 
   private logger: Logger;
 
@@ -103,8 +98,9 @@ export class CurveV1 extends SimpleExchange implements IDex<CurveV1Data> {
 
   protected pools: Record<string, PoolConfig>;
   protected eventSupportedPools: string[];
-  protected factoryAddress: string | null;
   protected baseTokens: Record<string, TokenWithReasonableVolume>;
+
+  protected disableFeeOnTransferTokenAddresses: Set<string>;
 
   readonly SRC_TOKEN_DEX_TRANSFERS = 1;
   readonly DEST_TOKEN_DEX_TRANSFERS = 1;
@@ -155,10 +151,6 @@ export class CurveV1 extends SimpleExchange implements IDex<CurveV1Data> {
       addr.toLowerCase(),
     );
 
-    this.factoryAddress = dexConfig.factoryAddress
-      ? dexConfig.factoryAddress.toLowerCase()
-      : null;
-
     this.baseTokens = Object.keys(dexConfig.baseTokens).reduce<
       Record<string, TokenWithReasonableVolume>
     >((acc, key) => {
@@ -171,110 +163,20 @@ export class CurveV1 extends SimpleExchange implements IDex<CurveV1Data> {
       return acc;
     }, {});
 
+    this.disableFeeOnTransferTokenAddresses =
+      dexConfig.disableFeeOnTransferTokenAddresses
+        ? new Set<string>(
+            Array.from(
+              dexConfig.disableFeeOnTransferTokenAddresses.values(),
+            ).map(addr => addr.toLowerCase()),
+          )
+        : new Set<string>();
+
     this.exchangeRouterInterface = new Interface(CurveABI as JsonFragment[]);
 
     this.logger = dexHelper.getLogger(dexKey);
 
     this.poolInterface = new Interface(StableSwapBBTC as any);
-    this.factoryInterface = new Interface(FactoryRegistryABI as any);
-  }
-
-  async fetchFactoryPools() {
-    if (!this.factoryAddress) {
-      this.logger.warn(
-        `[OK] try to fetch factory pools without factoryAddress ${this.dexKey}`,
-      );
-      return;
-    }
-
-    const results = await this.dexHelper.multiWrapper!.tryAggregate(true, [
-      {
-        target: this.factoryAddress,
-        callData: this.factoryInterface.encodeFunctionData('pool_count'),
-        decodeFunction: uin256DecodeToNumber,
-      },
-    ]);
-
-    const poolCount = results[0].returnData;
-
-    const calldataGetPoolAddresses = _.range(0, poolCount).map(i => ({
-      target: this.factoryAddress,
-      callData: this.factoryInterface.encodeFunctionData('pool_list', [i]),
-    }));
-
-    const resultGetPoolAddresses = await this.dexHelper.multiContract.methods
-      .aggregate(calldataGetPoolAddresses)
-      .call();
-    const poolAddresses = resultGetPoolAddresses.returnData.map((d: any) =>
-      coder.decode(['address'], d)[0].toLowerCase(),
-    );
-
-    const existingPoolMap = Object.values(this.pools).reduce(
-      (acc: { [key: string]: boolean }, p) => {
-        acc[p.address.toLowerCase()] = true;
-        return acc;
-      },
-      {},
-    );
-    const newPoolAddresses = poolAddresses.filter(
-      (p: string) => !existingPoolMap[p],
-    );
-
-    const calldataGetCoins = newPoolAddresses
-      .map((poolAddress: string) => [
-        {
-          target: this.factoryAddress,
-          callData: this.factoryInterface.encodeFunctionData('get_coins', [
-            poolAddress,
-          ]),
-        },
-        {
-          target: this.factoryAddress,
-          callData: this.factoryInterface.encodeFunctionData(
-            'get_underlying_coins',
-            [poolAddress],
-          ),
-        },
-      ])
-      .flat();
-
-    const resultGetCoins = await this.dexHelper.multiContract.methods
-      .tryAggregate(false, calldataGetCoins)
-      .call();
-
-    newPoolAddresses.forEach((address: string, i: number) => {
-      if (!resultGetCoins[2 * i].success) {
-        this.logger.error('get_coins should not fail');
-        return;
-      }
-      const coins = coder
-        .decode(['address[4]'], resultGetCoins[2 * i].returnData)[0]
-        .map((a: string) => a.toLowerCase())
-        .filter((a: string) => a !== NULL_ADDRESS);
-      const isMetapool = resultGetCoins[2 * i + 1].success;
-      const underlying = isMetapool
-        ? coder
-            .decode(['address[8]'], resultGetCoins[2 * i + 1].returnData)[0]
-            .map((a: string) => a.toLowerCase())
-            .filter((a: string) => a !== NULL_ADDRESS)
-        : [];
-      const name = `factory_${address}`;
-      const poolConfig: PoolConfig = {
-        underlying,
-        coins,
-        address,
-        name,
-        type: 2,
-        version: 3,
-        isLending: false,
-        isMetapool,
-      };
-      this.pools[name] = poolConfig;
-    });
-  }
-
-  async initializePricing(blockNumber: number): Promise<void> {
-    await this.fetchFactoryPools();
   }
 
   protected getPoolByAddress(address: Address) {
@@ -696,8 +598,18 @@ export class CurveV1 extends SimpleExchange implements IDex<CurveV1Data> {
         return null;
       }
 
+      _from.address = _from.address.toLowerCase();
+      _to.address = _to.address.toLowerCase();
+
       const _isSrcTokenTransferFeeToBeExchanged =
-        isSrcTokenTransferFeeToBeExchanged(transferFees);
+        this.disableFeeOnTransferTokenAddresses.has(_from.address)
+          ? false
+          : isSrcTokenTransferFeeToBeExchanged(transferFees);
+
+      const _isDestTokenTransferFeeToBeExchanged =
+        this.disableFeeOnTransferTokenAddresses.has(_to.address)
+          ? false
+          : isDestTokenTransferFeeToBeExchanged(transferFees);
 
       // We first filter out pools which were explicitly excluded and pools which are already used
       // then for the good pools we set the boolean to be true for used pools
@@ -805,12 +717,14 @@ export class CurveV1 extends SimpleExchange implements IDex<CurveV1Data> {
           const indexes = this.getSwapIndexes(_from, _to, poolConfig);
           const [i, j, swapType] = indexes;
 
-          _price.rates = applyTransferFee(
-            _price.rates,
-            side,
-            transferFees.destDexFee,
-            this.DEST_TOKEN_DEX_TRANSFERS,
-          );
+          if (_isDestTokenTransferFeeToBeExchanged) {
+            _price.rates = applyTransferFee(
+              _price.rates,
+              side,
+              transferFees.destDexFee,
+              this.DEST_TOKEN_DEX_TRANSFERS,
+            );
+          }
 
           acc.push({
             prices: [0n, ..._price.rates.slice(1)],

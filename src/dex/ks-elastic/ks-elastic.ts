@@ -586,6 +586,7 @@ export class KsElastic
           state,
           amountSpecified,
           zeroForOne,
+          isSell,
         );
       });
     } catch (e) {
