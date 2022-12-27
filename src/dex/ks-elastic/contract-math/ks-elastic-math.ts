@@ -46,13 +46,13 @@ class KsElasticMath {
     zeroForOne: boolean,
     sqrtPriceLimitX96?: bigint | 0n,
   ): bigint {
-    const amountOut = this.swapProMM(
+    return this.swapProMM(
       poolState,
       zeroForOne,
       inputAmount,
       sqrtPriceLimitX96,
     );
-    return -amountOut;
+    // return -amountOut;
   }
 
   private swapProMM(
@@ -80,6 +80,7 @@ class KsElasticMath {
       invariant(sqrtPriceLimitX96 > poolState.sqrtPriceX96, 'RATIO_CURRENT');
     }
     const exactInput = amountSpecified >= ZERO;
+
     const state = {
       amountSpecifiedRemaining: amountSpecified,
       amountCalculated: ZERO,
@@ -103,16 +104,29 @@ class KsElasticMath {
         deltaL: 0n,
       };
       step.sqrtPriceStartX96 = state.sqrtPriceX96;
-      const [ticketNext, initialized] =
-        TickList.nextInitializedTickWithinFixedDistance(
-          tickList,
-          Number(state.tick),
-          zeroForOne,
-          480,
-        );
-
-      step.tickNext = BigInt(ticketNext);
-      step.initialized = initialized;
+      let ticketNext;
+      let initialized;
+      try {
+        [ticketNext, initialized] =
+          TickList.nextInitializedTickWithinFixedDistance(
+            tickList,
+            Number(state.tick),
+            zeroForOne,
+            480,
+          );
+        step.tickNext = BigInt(ticketNext);
+        step.initialized = initialized;
+      } catch (e) {
+        if (
+          e instanceof Error &&
+          e.message.endsWith(OUT_OF_RANGE_ERROR_POSTFIX)
+        ) {
+          state.amountSpecifiedRemaining = 0n;
+          state.amountCalculated = 0n;
+          break;
+        }
+        throw e;
+      }
 
       if (step.tickNext < TickMath.MIN_TICK) {
         step.tickNext = TickMath.MIN_TICK;
@@ -138,9 +152,15 @@ class KsElasticMath {
           zeroForOne,
         );
 
-      state.amountSpecifiedRemaining -= step.amountIn;
-      state.amountCalculated += step.amountOut;
       state.reinvestL += step.deltaL;
+      if (exactInput) {
+        state.amountSpecifiedRemaining -= step.amountIn;
+        state.amountCalculated += step.amountOut;
+      } else {
+        state.amountSpecifiedRemaining += step.amountOut;
+        state.amountCalculated =
+          state.amountCalculated + step.amountIn + step.feeAmount;
+      }
 
       if (state.sqrtPriceX96 == step.sqrtPriceNextX96) {
         if (step.initialized) {
