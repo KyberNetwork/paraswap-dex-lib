@@ -55,8 +55,89 @@ jest.setTimeout(1000 * 60 * 3);
 describe('KsElastic E2E', () => {
   const dexKey = 'KsElastic';
 
-  describe('KsElastic MAINNET', () => {
-    const network = Network.MAINNET;
+  // describe('KsElastic MAINNET', () => {
+  //   const network = Network.MAINNET;
+  //   const tokens = Tokens[network];
+  //   const holders = Holders[network];
+  //   const provider = new StaticJsonRpcProvider(
+  //     generateConfig(network).privateHttpProvider,
+  //     network,
+  //   );
+
+  //   const tokenASymbol: string = 'USDT';
+  //   const tokenBSymbol: string = 'WETH';
+  //   const nativeTokenSymbol = NativeTokenSymbols[network];
+
+  //   const tokenAAmount: string = '11111000000';
+  //   const tokenBAmount: string = '11000000000000000000';
+  //   const nativeTokenAmount = '11000000000000000000';
+
+  //   const sideToContractMethods = new Map([
+  //     [
+  //       SwapSide.SELL,
+  //       [
+  //         ContractMethod.simpleSwap,
+  //         // ContractMethod.multiSwap,
+  //         // ContractMethod.megaSwap,
+  //       ],
+  //     ],
+  //     // [
+  //     //   SwapSide.BUY,
+  //     //   [
+  //     //     ContractMethod.simpleBuy,
+  //     //     // ContractMethod.buy
+  //     //   ],
+  //     // ],
+  //   ]);
+
+  //   sideToContractMethods.forEach((contractMethods, side) =>
+  //     contractMethods.forEach((contractMethod: ContractMethod) => {
+  //       describe(`${contractMethod}`, () => {
+  //         it(`${network} ${side} ${contractMethod} ${nativeTokenSymbol} -> ${tokenASymbol}`, async () => {
+  //           await testE2E(
+  //             tokens[nativeTokenSymbol],
+  //             tokens[tokenASymbol],
+  //             holders[nativeTokenSymbol],
+  //             side === SwapSide.SELL ? nativeTokenAmount : tokenAAmount,
+  //             side,
+  //             dexKey,
+  //             contractMethod,
+  //             network,
+  //             provider,
+  //           );
+  //         });
+  //         it.only(`${network} ${side} ${contractMethod} ${tokenASymbol} -> ${nativeTokenSymbol}`, async () => {
+  //           await testE2E(
+  //             tokens[tokenASymbol],
+  //             tokens[nativeTokenSymbol],
+  //             holders[tokenASymbol],
+  //             side === SwapSide.SELL ? tokenAAmount : nativeTokenAmount,
+  //             side,
+  //             dexKey,
+  //             contractMethod,
+  //             network,
+  //             provider,
+  //           );
+  //         });
+  //         it(`${network} ${side} ${contractMethod} ${tokenASymbol} -> ${tokenBSymbol}`, async () => {
+  //           await testE2E(
+  //             tokens[tokenASymbol],
+  //             tokens[tokenBSymbol],
+  //             holders[tokenASymbol],
+  //             side === SwapSide.SELL ? tokenAAmount : tokenBAmount,
+  //             side,
+  //             dexKey,
+  //             contractMethod,
+  //             network,
+  //             provider,
+  //           );
+  //         });
+  //       });
+  //     }),
+  //   );
+  // });
+  describe('KsElastic POLYGON', () => {
+    const network = Network.POLYGON;
     const tokens = Tokens[network];
     const holders = Holders[network];
     const provider = new StaticJsonRpcProvider(
@@ -64,13 +145,13 @@ describe('KsElastic E2E', () => {
       network,
     );
 
-    const tokenASymbol: string = 'USDT';
+    const tokenASymbol: string = 'USDC';
     const tokenBSymbol: string = 'WETH';
     const nativeTokenSymbol = NativeTokenSymbols[network];
 
     const tokenAAmount: string = '11111000000';
-    const tokenBAmount: string = '1000000000000000000';
-    const nativeTokenAmount = '100000000000000000';
+    const tokenBAmount: string = '11000000000000000000';
+    const nativeTokenAmount = '11000000000000000000';
 
     const sideToContractMethods = new Map([
       [
@@ -81,13 +162,11 @@ describe('KsElastic E2E', () => {
           // ContractMethod.megaSwap,
         ],
       ],
-      [
-        SwapSide.BUY,
-        [
-          // ContractMethod.simpleBuy,
-          // ContractMethod.buy
-        ],
-      ],
+      // [SwapSide.BUY, [
+      //   ContractMethod.simpleBuy,
+      //   //  ContractMethod.buy
+      //   ]
+      //   ],
     ]);
 
     sideToContractMethods.forEach((contractMethods, side) =>

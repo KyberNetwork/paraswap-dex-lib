@@ -1,4 +1,4 @@
-import _, { filter } from 'lodash';
+import _, { filter, concat } from 'lodash';
 import { Contract } from 'web3-eth-contract';
 import { AbiItem } from 'web3-utils';
 import { Interface } from '@ethersproject/abi';
@@ -215,12 +215,36 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
     );
   }
 
-  getAllTickRequest(poolAddress: string): stateRequestCallData {
+  getTickInRangeRequest(
+    poolAddress: string,
+    startTick: Number,
+    length: Number,
+  ): stateRequestCallData {
     const data = {
-      funcName: 'getAllTicks',
-      params: [poolAddress],
+      funcName: 'getTicksInRange',
+      params: [poolAddress, startTick, length],
     };
     return data;
+  }
+
+  async getAllTicks(poolAddress: string, blockNumber: number) {
+    let startTick = -887272;
+    let length = 1000;
+    let shouldFinish = false;
+    let allTicks: number[] = [];
+    while (!shouldFinish) {
+      let ticks = await this.getTickInRange(
+        poolAddress,
+        startTick,
+        length,
+        blockNumber,
+      );
+      if (ticks.length < length || ticks[length - 1] == 0) {
+        shouldFinish = true;
+      }
+      allTicks = concat(allTicks, ticks);
+    }
+    return filter(allTicks, tick => tick != 0);
   }
 
   async gePoolContract() {
@@ -249,8 +273,17 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
     ).call({}, blockNumber || 'latest');
   }
 
-  getAllTick(poolAddress: string, blockNumber: number) {
-    const callRequest = this.getAllTickRequest(poolAddress);
+  async getTickInRange(
+    poolAddress: string,
+    startTick: number,
+    length: number,
+    blockNumber: number,
+  ) {
+    const callRequest = this.getTickInRangeRequest(
+      poolAddress,
+      startTick,
+      length,
+    );
     return this.tickReader.methods[callRequest.funcName](
       ...callRequest.params,
     ).call({}, blockNumber || 'latest');
@@ -295,7 +328,7 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
     }
 
     const batchRequestData = [
-      this.getAllTick(this.poolAddress, blockNumber),
+      this.getAllTicks(this.poolAddress, blockNumber),
       this.getPoolState(blockNumber),
       this.getLiquidityState(blockNumber),
     ];
@@ -388,19 +421,6 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
         liquidityDelta: amount,
       }),
       pool,
-    );
-  }
-
-  private _reduceTickBitmap(
-    tickBitmap: Record<NumberAsString, bigint>,
-    tickBitmapToReduce: [],
-  ) {
-    return tickBitmapToReduce.reduce<Record<NumberAsString, bigint>>(
-      (acc, tickIndex) => {
-        acc[tickIndex] = bigIntify(tickIndex);
-        return acc;
-      },
-      tickBitmap,
     );
   }
 

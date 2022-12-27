@@ -29,7 +29,6 @@ export const ZERO_ORACLE_OBSERVATION = {
 };
 
 export const OUT_OF_RANGE_ERROR_POSTFIX = `INVALID_TICK_BIT_MAP_RANGES`;
-
 /**
  * The default factory enabled fee amounts, denominated in hundredths of bips.
  */

@@ -5,53 +5,51 @@ import { Interface, Result } from '@ethersproject/abi';
 import { DummyDexHelper } from '../../dex-helper/index';
 import { Network, SwapSide } from '../../constants';
 import { BI_POWS } from '../../bigint-constants';
-import { KsElastic } from './ks-elastic';
-import {
-  checkPoolPrices,
-  checkPoolsLiquidity,
-  checkConstantPoolPrices,
-} from '../../../tests/utils';
+import { KsElastic as KssElastic } from './ks-elastic';
+import { checkPoolPrices, checkPoolsLiquidity } from '../../../tests/utils';
 import { Tokens } from '../../../tests/constants-e2e';
+import KsElasticQuoterABI from '../../abi/ks-elastic/Quoter.json';
+import { Address } from '@paraswap/core';
+import { bigIntify } from '../../utils';
 
-/*
-  README
-  ======
-
-  This test script adds tests for KsElastic general integration
-  with the DEX interface. The test cases below are example tests.
-  It is recommended to add tests which cover KsElastic specific
-  logic.
-
-  You can run this individual test script by running:
-  `npx jest src/dex/<dex-name>/<dex-name>-integration.test.ts`
-
-  (This comment should be removed from the final implementation)
-*/
-
-const network = Network.MAINNET;
-const TokenASymbol = 'TokenASymbol';
+const network = Network.POLYGON;
+const TokenASymbol = 'USDC';
 const TokenA = Tokens[network][TokenASymbol];
 
-const TokenBSymbol = 'TokenBSymbol';
+const TokenBSymbol = 'WMATIC';
 const TokenB = Tokens[network][TokenBSymbol];
 
-const amounts = [0n, BI_POWS[18], 2000000000000000000n];
+const amounts = [
+  0n,
+  10_000n * BI_POWS[6],
+  20_000n * BI_POWS[6],
+  30_000n * BI_POWS[6],
+];
+
+const amountsBuy = [0n, 1n * BI_POWS[18], 2n * BI_POWS[18], 3n * BI_POWS[18]];
 
 const dexHelper = new DummyDexHelper(network);
 const dexKey = 'KsElastic';
+
+const quoterIface = new Interface(KsElasticQuoterABI);
 
 function getReaderCalldata(
   exchangeAddress: string,
   readerIface: Interface,
   amounts: bigint[],
   funcName: string,
-  // TODO: Put here additional arguments you need
+  tokenIn: Address,
+  tokenOut: Address,
+  fee: bigint,
 ) {
   return amounts.map(amount => ({
     target: exchangeAddress,
     callData: readerIface.encodeFunctionData(funcName, [
-      // TODO: Put here additional arguments to encode them
+      tokenIn,
+      tokenOut,
+      fee,
       amount,
+      0n,
     ]),
   }));
 }
@@ -61,7 +59,6 @@ function decodeReaderResult(
   readerIface: Interface,
   funcName: string,
 ) {
-  // TODO: Adapt this function for your needs
   return results.map(result => {
     const parsed = readerIface.decodeFunctionResult(funcName, result);
     return BigInt(parsed[0]._hex);
@@ -69,49 +66,86 @@ function decodeReaderResult(
 }
 
 async function checkOnChainPricing(
-  ksElastic: KsElastic,
+  KsElastic: KssElastic,
   funcName: string,
   blockNumber: number,
   prices: bigint[],
+  tokenIn: Address,
+  tokenOut: Address,
+  fee: bigint,
+  _amounts: bigint[],
 ) {
-  const exchangeAddress = ''; // TODO: Put here the real exchange address
+  // Quoter address
+  const exchangeAddress = '0xb27308f9F90D607463bb33eA1BeBb41C27CE5AB6';
+  const readerIface = quoterIface;
 
-  // TODO: Replace dummy interface with the real one
-  // Normally you can get it from ksElastic.Iface or from eventPool.
-  // It depends on your implementation
-  const readerIface = new Interface('');
+  const sum = prices.reduce((acc, curr) => (acc += curr), 0n);
+
+  if (sum === 0n) {
+    console.log(
+      `Prices were not calculated for tokenIn=${tokenIn}, tokenOut=${tokenOut}, fee=${fee.toString()}. Most likely price impact is too big for requested amount`,
+    );
+    return false;
+  }
 
   const readerCallData = getReaderCalldata(
     exchangeAddress,
     readerIface,
-    amounts.slice(1),
+    _amounts.slice(1),
     funcName,
+    tokenIn,
+    tokenOut,
+    fee,
   );
-  const readerResult = (
-    await dexHelper.multiContract.methods
-      .aggregate(readerCallData)
-      .call({}, blockNumber)
-  ).returnData;
+
+  let readerResult;
+  try {
+    readerResult = (
+      await dexHelper.multiContract.methods
+        .aggregate(readerCallData)
+        .call({}, blockNumber)
+    ).returnData;
+  } catch (e) {
+    console.log(
+      `Can not fetch on-chain pricing for fee ${fee}. It happens for low liquidity pools`,
+      e,
+    );
+    return false;
+  }
+
   const expectedPrices = [0n].concat(
     decodeReaderResult(readerResult, readerIface, funcName),
   );
 
-  expect(prices).toEqual(expectedPrices);
+  let firstZeroIndex = prices.slice(1).indexOf(0n);
+
+  // we skipped first, so add +1 on result
+  firstZeroIndex = firstZeroIndex === -1 ? prices.length : firstZeroIndex;
+
+  // Compare only the ones for which we were able to calculate prices
+  expect(prices.slice(0, firstZeroIndex)).toEqual(
+    expectedPrices.slice(0, firstZeroIndex),
+  );
+  return true;
 }
 
 describe('KsElastic', function () {
   let blockNumber: number;
-  let ksElastic: KsElastic;
+  let KsElastic: KssElastic;
+  let KsElasticMainnet: KssElastic;
 
-  beforeAll(async () => {
-    blockNumber = await dexHelper.provider.getBlockNumber();
-
-    ksElastic = new KsElastic(network, dexKey, dexHelper);
-    await ksElastic.initializePricing(blockNumber);
+  beforeEach(async () => {
+    blockNumber = await dexHelper.web3Provider.eth.getBlockNumber();
+    KsElastic = new KssElastic(network, dexKey, dexHelper);
+    KsElasticMainnet = new KssElastic(
+      Network.MAINNET,
+      dexKey,
+      new DummyDexHelper(Network.MAINNET),
+    );
   });
 
   it('getPoolIdentifiers and getPricesVolume SELL', async function () {
-    const pools = await ksElastic.getPoolIdentifiers(
+    const pools = await KsElastic.getPoolIdentifiers(
       TokenA,
       TokenB,
       SwapSide.SELL,
@@ -121,7 +155,7 @@ describe('KsElastic', function () {
 
     expect(pools.length).toBeGreaterThan(0);
 
-    const poolPrices = await ksElastic.getPricesVolume(
+    const poolPrices = await KsElastic.getPricesVolume(
       TokenA,
       TokenB,
       amounts,
@@ -132,66 +166,302 @@ describe('KsElastic', function () {
     console.log(`${TokenASymbol} <> ${TokenBSymbol} Pool Prices: `, poolPrices);
 
     expect(poolPrices).not.toBeNull();
-    if (ksElastic.hasConstantPriceLargeAmounts) {
-      checkConstantPoolPrices(poolPrices!, amounts, dexKey);
-    } else {
-      checkPoolPrices(poolPrices!, amounts, SwapSide.SELL, dexKey);
-    }
+    checkPoolPrices(poolPrices!, amounts, SwapSide.SELL, dexKey);
 
-    // Check if onchain pricing equals to calculated ones
-    await checkOnChainPricing(
-      ksElastic,
-      '', // TODO: Put here the functionName to call
-      blockNumber,
-      poolPrices![0].prices,
+    let falseChecksCounter = 0;
+    await Promise.all(
+      poolPrices!.map(async price => {
+        const fee = KsElastic.eventPools[price.poolIdentifier!]!.fee;
+        const res = await checkOnChainPricing(
+          KsElastic,
+          'quoteExactInputSingle',
+          blockNumber,
+          price.prices,
+          TokenA.address,
+          TokenB.address,
+          bigIntify(fee),
+          amounts,
+        );
+        if (res === false) falseChecksCounter++;
+      }),
     );
+
+    expect(falseChecksCounter).toBeLessThan(poolPrices!.length);
   });
 
-  it('getPoolIdentifiers and getPricesVolume BUY', async function () {
-    const pools = await ksElastic.getPoolIdentifiers(
-      TokenA,
-      TokenB,
-      SwapSide.BUY,
-      blockNumber,
-    );
-    console.log(`${TokenASymbol} <> ${TokenBSymbol} Pool Identifiers: `, pools);
+  // it('getPoolIdentifiers and getPricesVolume BUY', async function () {
+  //   const pools = await KsElastic.getPoolIdentifiers(
+  //     TokenA,
+  //     TokenB,
+  //     SwapSide.BUY,
+  //     blockNumber,
+  //   );
+  //   console.log(`${TokenASymbol} <> ${TokenBSymbol} Pool Identifiers: `, pools);
 
-    expect(pools.length).toBeGreaterThan(0);
+  //   expect(pools.length).toBeGreaterThan(0);
 
-    const poolPrices = await ksElastic.getPricesVolume(
-      TokenA,
-      TokenB,
-      amounts,
-      SwapSide.BUY,
-      blockNumber,
-      pools,
-    );
-    console.log(`${TokenASymbol} <> ${TokenBSymbol} Pool Prices: `, poolPrices);
+  //   const poolPrices = await KsElastic.getPricesVolume(
+  //     TokenA,
+  //     TokenB,
+  //     amountsBuy,
+  //     SwapSide.BUY,
+  //     blockNumber,
+  //     pools,
+  //   );
+  //   console.log(`${TokenASymbol} <> ${TokenBSymbol} Pool Prices: `, poolPrices);
 
-    expect(poolPrices).not.toBeNull();
-    if (ksElastic.hasConstantPriceLargeAmounts) {
-      checkConstantPoolPrices(poolPrices!, amounts, dexKey);
-    } else {
-      checkPoolPrices(poolPrices!, amounts, SwapSide.BUY, dexKey);
-    }
+  //   expect(poolPrices).not.toBeNull();
+  //   checkPoolPrices(poolPrices!, amountsBuy, SwapSide.BUY, dexKey);
 
-    // Check if onchain pricing equals to calculated ones
-    await checkOnChainPricing(
-      ksElastic,
-      '', // TODO: Put here the functionName to call
-      blockNumber,
-      poolPrices![0].prices,
-    );
-  });
+  //   // Check if onchain pricing equals to calculated ones
+  //   let falseChecksCounter = 0;
+  //   await Promise.all(
+  //     poolPrices!.map(async price => {
+  //       const fee = KsElastic.eventPools[price.poolIdentifier!]!.fee;
+  //       const res = await checkOnChainPricing(
+  //         KsElastic,
+  //         'quoteExactOutputSingle',
+  //         blockNumber,
+  //         price.prices,
+  //         TokenA.address,
+  //         TokenB.address,
+  //         BigInt(fee),
+  //         amountsBuy,
+  //       );
+  //       if (res === false) falseChecksCounter++;
+  //     }),
+  //   );
+  //   expect(falseChecksCounter).toBeLessThan(poolPrices!.length);
+  // });
+
+  // it('getPoolIdentifiers and getPricesVolume SELL stable pairs', async function () {
+  //   const TokenASymbol = 'USDT';
+  //   const TokenA = Tokens[network][TokenASymbol];
+
+  //   const TokenBSymbol = 'USDC';
+  //   const TokenB = Tokens[network][TokenBSymbol];
+
+  //   const amounts = [
+  //     0n,
+  //     6000000n,
+  //     12000000n,
+  //     18000000n,
+  //     24000000n,
+  //     30000000n,
+  //     36000000n,
+  //     42000000n,
+  //     48000000n,
+  //     54000000n,
+  //     60000000n,
+  //     66000000n,
+  //     72000000n,
+  //     78000000n,
+  //     84000000n,
+  //     90000000n,
+  //     96000000n,
+  //     102000000n,
+  //     108000000n,
+  //     114000000n,
+  //     120000000n,
+  //     126000000n,
+  //     132000000n,
+  //     138000000n,
+  //     144000000n,
+  //     150000000n,
+  //     156000000n,
+  //     162000000n,
+  //     168000000n,
+  //     174000000n,
+  //     180000000n,
+  //     186000000n,
+  //     192000000n,
+  //     198000000n,
+  //     204000000n,
+  //     210000000n,
+  //     216000000n,
+  //     222000000n,
+  //     228000000n,
+  //     234000000n,
+  //     240000000n,
+  //     246000000n,
+  //     252000000n,
+  //     258000000n,
+  //     264000000n,
+  //     270000000n,
+  //     276000000n,
+  //     282000000n,
+  //     288000000n,
+  //     294000000n,
+  //     300000000n,
+  //   ];
+
+  //   const pools = await KsElastic.getPoolIdentifiers(
+  //     TokenA,
+  //     TokenB,
+  //     SwapSide.SELL,
+  //     blockNumber,
+  //   );
+  //   console.log(`${TokenASymbol} <> ${TokenBSymbol} Pool Identifiers: `, pools);
+
+  //   expect(pools.length).toBeGreaterThan(0);
+
+  //   const poolPrices = await KsElastic.getPricesVolume(
+  //     TokenA,
+  //     TokenB,
+  //     amounts,
+  //     SwapSide.SELL,
+  //     blockNumber,
+  //     pools,
+  //   );
+  //   console.log(`${TokenASymbol} <> ${TokenBSymbol} Pool Prices: `, poolPrices);
+
+  //   expect(poolPrices).not.toBeNull();
+  //   checkPoolPrices(
+  //     poolPrices!.filter(pp => pp.unit !== 0n),
+  //     amounts,
+  //     SwapSide.SELL,
+  //     dexKey,
+  //   );
+
+  //   // Check if onchain pricing equals to calculated ones
+  //   let falseChecksCounter = 0;
+  //   await Promise.all(
+  //     poolPrices!.map(async price => {
+  //       const fee = KsElastic.eventPools[price.poolIdentifier!]!.fee;
+  //       const res = await checkOnChainPricing(
+  //         KsElastic,
+  //         'quoteExactInputSingle',
+  //         blockNumber,
+  //         price.prices,
+  //         TokenA.address,
+  //         TokenB.address,
+  //         BigInt(fee),
+  //         amounts,
+  //       );
+  //       if (res === false) falseChecksCounter++;
+  //     }),
+  //   );
+  //   expect(falseChecksCounter).toBeLessThan(poolPrices!.length);
+  // });
+
+  // it('getPoolIdentifiers and getPricesVolume BUY stable pairs', async function () {
+  //   const TokenASymbol = 'DAI';
+  //   const TokenA = Tokens[network][TokenASymbol];
+
+  //   const TokenBSymbol = 'USDC';
+  //   const TokenB = Tokens[network][TokenBSymbol];
+
+  //   const amountsBuy = [
+  //     0n,
+  //     6000000n,
+  //     12000000n,
+  //     18000000n,
+  //     24000000n,
+  //     30000000n,
+  //     36000000n,
+  //     42000000n,
+  //     48000000n,
+  //     54000000n,
+  //     60000000n,
+  //     66000000n,
+  //     72000000n,
+  //     78000000n,
+  //     84000000n,
+  //     90000000n,
+  //     96000000n,
+  //     102000000n,
+  //     108000000n,
+  //     114000000n,
+  //     120000000n,
+  //     126000000n,
+  //     132000000n,
+  //     138000000n,
+  //     144000000n,
+  //     150000000n,
+  //     156000000n,
+  //     162000000n,
+  //     168000000n,
+  //     174000000n,
+  //     180000000n,
+  //     186000000n,
+  //     192000000n,
+  //     198000000n,
+  //     204000000n,
+  //     210000000n,
+  //     216000000n,
+  //     222000000n,
+  //     228000000n,
+  //     234000000n,
+  //     240000000n,
+  //     246000000n,
+  //     252000000n,
+  //     258000000n,
+  //     264000000n,
+  //     270000000n,
+  //     276000000n,
+  //     282000000n,
+  //     288000000n,
+  //     294000000n,
+  //     300000000n,
+  //   ];
+
+  //   const pools = await KsElastic.getPoolIdentifiers(
+  //     TokenA,
+  //     TokenB,
+  //     SwapSide.BUY,
+  //     blockNumber,
+  //   );
+  //   console.log(`${TokenASymbol} <> ${TokenBSymbol} Pool Identifiers: `, pools);
+
+  //   expect(pools.length).toBeGreaterThan(0);
+
+  //   const poolPrices = await KsElastic.getPricesVolume(
+  //     TokenA,
+  //     TokenB,
+  //     amountsBuy,
+  //     SwapSide.BUY,
+  //     blockNumber,
+  //     pools,
+  //   );
+  //   console.log(`${TokenASymbol} <> ${TokenBSymbol} Pool Prices: `, poolPrices);
+
+  //   expect(poolPrices).not.toBeNull();
+  //   checkPoolPrices(
+  //     poolPrices!.filter(pp => pp.unit !== 0n),
+  //     amountsBuy,
+  //     SwapSide.BUY,
+  //     dexKey,
+  //   );
+
+  //   // Check if onchain pricing equals to calculated ones
+  //   let falseChecksCounter = 0;
+  //   await Promise.all(
+  //     poolPrices!.map(async price => {
+  //       const fee = KsElastic.eventPools[price.poolIdentifier!]!.fee;
+  //       const res = await checkOnChainPricing(
+  //         KsElastic,
+  //         'quoteExactOutputSingle',
+  //         blockNumber,
+  //         price.prices,
+  //         TokenA.address,
+  //         TokenB.address,
+  //         BigInt(fee),
+  //         amountsBuy,
+  //       );
+  //       if (res === false) falseChecksCounter++;
+  //     }),
+  //   );
+  //   expect(falseChecksCounter).toBeLessThan(poolPrices!.length);
+  // });
 
   it('getTopPoolsForToken', async function () {
-    const poolLiquidity = await ksElastic.getTopPoolsForToken(
-      TokenA.address,
+    const poolLiquidity = await KsElasticMainnet.getTopPoolsForToken(
+      Tokens[Network.MAINNET]['USDC'].address,
       10,
     );
     console.log(`${TokenASymbol} Top Pools:`, poolLiquidity);
 
-    if (!ksElastic.hasConstantPriceLargeAmounts) {
+    if (!KsElastic.hasConstantPriceLargeAmounts) {
       checkPoolsLiquidity(poolLiquidity, TokenA.address, dexKey);
     }
   });

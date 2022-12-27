@@ -48,12 +48,13 @@ export const KsElasticConfig: DexConfigMap<DexParams> = {
       tickReader: '0x165c68077ac06c83800d19200e6E2B08D02dE75D',
       multiCall: '0x5BA1e12693Dc8F9c48aAD8770482f4739bEeD696',
     },
-    // [Network.POLYGON]: {
-    //   factory: '0x1F98431c8aD98523631AE4a59f267346ea31F984',
-    //   router: '0xE592427A0AEce92De3Edee1F18E0157C05861564',
-    //   supportedFees: SUPPORTED_FEES,
-    //   tickReader: '0x6Dc993Fe1e945A640576B4Dca81281d8e998DF71',
-    // },
+    [Network.POLYGON]: {
+      factory: '0x5F1dddbf348aC2fbe22a163e30F99F9ECE3DD50a',
+      router: '0xC1e7dFE73E1598E3910EF4C7845B68A9Ab6F4c83',
+      supportedFees: SUPPORTED_FEES,
+      tickReader: '0x165c68077ac06c83800d19200e6E2B08D02dE75D',
+      multiCall: '0xed386Fe855C1EFf2f843B910923Dd8846E45C5A4',
+    },
   },
 };
 

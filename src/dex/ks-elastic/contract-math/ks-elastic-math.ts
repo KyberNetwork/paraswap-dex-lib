@@ -11,6 +11,8 @@ import { TickMath } from './TickMath';
 import { _require } from '../../../utils';
 import { DeepReadonly } from 'ts-essentials';
 import { NumberAsString, SwapSide } from 'paraswap-core';
+import { OUT_OF_RANGE_ERROR_POSTFIX } from '../constants';
+
 type ModifyPositionParams = {
   tickLower: bigint;
   tickUpper: bigint;
@@ -25,14 +27,14 @@ class KsElasticMath {
     isSell: boolean,
     sqrtPriceLimitX96?: bigint | 0n,
   ): bigint {
-    const amountOut = this.swapProMM(
+    return this.swapProMM(
       poolState,
       zeroForOne,
       inputAmount,
       isSell,
       sqrtPriceLimitX96,
     );
-    return -amountOut;
+    // return -amountOut;
   }
 
   private swapProMM(
@@ -60,10 +62,8 @@ class KsElasticMath {
       invariant(sqrtPriceLimitX96 < TickMath.MAX_SQRT_RATIO, 'RATIO_MAX');
       invariant(sqrtPriceLimitX96 > poolState.sqrtPriceX96, 'RATIO_CURRENT');
     }
-    if (poolState.sqrtPriceX96 < 0n) {
-      console.log('PoolState====', poolState);
-    }
     const exactInput = amountSpecified >= ZERO;
+
     const state = {
       amountSpecifiedRemaining: amountSpecified,
       amountCalculated: ZERO,
@@ -72,7 +72,6 @@ class KsElasticMath {
       sqrtPriceX96: poolState.sqrtPriceX96,
       tick: poolState.currentTick,
     };
-
     while (
       state.amountSpecifiedRemaining != ZERO &&
       state.sqrtPriceX96 != sqrtPriceLimitX96
@@ -88,16 +87,29 @@ class KsElasticMath {
         deltaL: 0n,
       };
       step.sqrtPriceStartX96 = state.sqrtPriceX96;
-      const [ticketNext, initialized] =
-        TickList.nextInitializedTickWithinFixedDistance(
-          tickList,
-          Number(state.tick),
-          zeroForOne,
-          480,
-        );
-
-      step.tickNext = BigInt(ticketNext);
-      step.initialized = initialized;
+      let ticketNext;
+      let initialized;
+      try {
+        [ticketNext, initialized] =
+          TickList.nextInitializedTickWithinFixedDistance(
+            tickList,
+            Number(state.tick),
+            zeroForOne,
+            480,
+          );
+        step.tickNext = BigInt(ticketNext);
+        step.initialized = initialized;
+      } catch (e) {
+        if (
+          e instanceof Error &&
+          e.message.endsWith(OUT_OF_RANGE_ERROR_POSTFIX)
+        ) {
+          state.amountSpecifiedRemaining = 0n;
+          state.amountCalculated = 0n;
+          break;
+        }
+        throw e;
+      }
 
       if (step.tickNext < TickMath.MIN_TICK) {
         step.tickNext = TickMath.MIN_TICK;
@@ -123,32 +135,52 @@ class KsElasticMath {
           zeroForOne,
         );
 
-      state.amountSpecifiedRemaining -= step.amountIn;
-      state.amountCalculated += step.amountOut;
       state.reinvestL += step.deltaL;
+      if (exactInput) {
+        state.amountSpecifiedRemaining -= step.amountIn;
+        state.amountCalculated += step.amountOut;
+      } else {
+        state.amountSpecifiedRemaining += step.amountOut;
+        state.amountCalculated =
+          state.amountCalculated + step.amountIn + step.feeAmount;
+      }
 
       if (state.sqrtPriceX96 !== step.sqrtPriceNextX96) {
         state.tick = TickMath.getTickAtSqrtRatio(state.sqrtPriceX96);
-        break;
+        continue;
       }
+
       if (step.initialized) {
         let tick = TickList.getTick(tickList, Number(step.tickNext));
         let liquidityNet = tick.liquidityNet;
-
         liquidityNet = zeroForOne ? -liquidityNet : liquidityNet;
         state.baseL = LiquidityMath.addDelta(state.baseL, liquidityNet);
       }
       state.tick = zeroForOne ? step.tickNext - 1n : step.tickNext;
     }
-    if (isSell)
-      return BigInt.asUintN(
-        256,
-        -(zeroForOne ? state.amountSpecifiedRemaining : state.amountCalculated),
-      );
-
+    // First extract calculated values
+    const [amount0, amount1] =
+      zeroForOne === exactInput
+        ? [
+            amountSpecified - state.amountSpecifiedRemaining,
+            state.amountCalculated,
+          ]
+        : [
+            state.amountCalculated,
+            amountSpecified - state.amountSpecifiedRemaining,
+          ];
+    if (
+      state.amountSpecifiedRemaining === 0n &&
+      state.amountCalculated === 0n
+    ) {
+      return 0n;
+    }
+    if (isSell) {
+      return BigInt.asUintN(256, -(zeroForOne ? amount1 : amount0));
+    }
     return zeroForOne
-      ? BigInt.asUintN(256, state.amountCalculated)
-      : BigInt.asUintN(256, state.amountSpecifiedRemaining);
+      ? BigInt.asUintN(256, amount0)
+      : BigInt.asUintN(256, amount1);
   }
 
   swapFromEvent(

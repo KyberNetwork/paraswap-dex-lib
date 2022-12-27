@@ -577,11 +577,12 @@ export class KsElastic
     side: SwapSide,
   ): bigint[] | null {
     try {
+      let isSell = side === SwapSide.SELL;
       return amounts.map(amount => {
-        const isSell = side === SwapSide.SELL;
         const amountSpecified = isSell
           ? BigInt.asIntN(256, amount)
           : -BigInt.asIntN(256, amount);
+
         return ksElasticMath.getOutputAmountProMM(
           state,
           amountSpecified,
