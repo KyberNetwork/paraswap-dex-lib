@@ -9,11 +9,11 @@ import { IDexHelper } from '../../dex-helper/idex-helper';
 
 import { PoolState, TickInfo } from './types';
 
-import ElasticFactoryABI from '../../abi/ks-elastic/ElasticFactory.json';
-import TickReaderABI from '../../abi/ks-elastic/TickReader.json';
-import PoolInstanceABI from '../../abi/ks-elastic/PoolInstance.json';
+import ElasticFactoryABI from '../../abi/ks-elastic/IFactory.json';
+import TickReaderABI from '../../abi/ks-elastic/TicksFeesReader.json';
+import PoolInstanceABI from '../../abi/ks-elastic/IPool.json';
 
-import MultiCallABI from '../../abi/ks-elastic/Multicall.json';
+import MultiCallABI from '../../abi/multi-v2.json';
 
 import { bigIntify } from '../../utils';
 import { ksElasticMath } from './contract-math/ks-elastic-math';

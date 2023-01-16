@@ -13,12 +13,7 @@ import {
   PoolPrices,
 } from '../../types';
 import { SwapSide, Network } from '../../constants';
-import {
-  getBigIntPow,
-  getDexKeysWithNetwork,
-  wrapETH,
-  bigIntify,
-} from '../../utils';
+import { getBigIntPow, getDexKeysWithNetwork, interpolate } from '../../utils';
 import { IDex } from '../../dex/idex';
 import { IDexHelper } from '../../dex-helper/idex-helper';
 import {
@@ -33,7 +28,7 @@ import * as CALLDATA_GAS_COST from '../../calldata-gas-cost';
 
 import { KsElasticConfig, Adapters, PoolsToPreload } from './config';
 import { KsElasticEventPool } from './ks-elastic-pool';
-import KsElasticRouterABI from '../../abi/ks-elastic/IProAmmRouter.json';
+import KsElasticRouterABI from '../../abi/ks-elastic/IRouter.json';
 
 import {
   KS_ELASTIC_EFFICIENCY_FACTOR,
@@ -106,7 +101,7 @@ export class KsElastic
       this.poolsToPreload.map(async pool =>
         Promise.all(
           this.config.supportedFees.map(async fee =>
-            this.getPool(pool.token0, pool.token1, fee, blockNumber),
+            this.getPool(pool.token0, pool.token1, BigInt(fee), blockNumber),
           ),
         ),
       ),
@@ -116,15 +111,14 @@ export class KsElastic
   async getPool(
     srcAddress: Address,
     destAddress: Address,
-    fee: FeeAmount,
+    fee: bigint,
     blockNumber: number,
   ): Promise<KsElasticEventPool | null> {
     let pool =
-      this.eventPools[
-        this.getPoolIdentifier(srcAddress, destAddress, bigIntify(Number(fee)))
-      ];
+      this.eventPools[this.getPoolIdentifier(srcAddress, destAddress, fee)];
     if (pool === undefined) {
       const [token0, token1] = this._sortTokens(srcAddress, destAddress);
+
       const key = `${token0}_${token1}_${fee}`.toLowerCase();
       await this.dexHelper.cache.hset(
         this.dexmapKey,
@@ -135,6 +129,7 @@ export class KsElastic
           fee: fee.toString(),
         }),
       );
+
       this.logger.trace(`starting to listen to new pool: ${key}`);
       pool = new KsElasticEventPool(
         this.dexKey,
@@ -143,7 +138,7 @@ export class KsElastic
         this.logger,
         this.config.tickReader,
         this.config.factory,
-        fee,
+        Number(fee.toString()),
         token0,
         token1,
         this.config.multiCall,
@@ -174,16 +169,16 @@ export class KsElastic
             `${this.dexKey}: Can not generate pool state for srcAddress=${srcAddress}, destAddress=${destAddress}, fee=${fee} pool`,
             e,
           );
-          return null;
+          throw new Error('Cannot generate pool state');
         }
       }
 
-      this.eventPools[
-        this.getPoolIdentifier(srcAddress, destAddress, bigIntify(Number(fee)))
-      ] = pool;
+      this.eventPools[this.getPoolIdentifier(srcAddress, destAddress, fee)] =
+        pool;
     }
     return pool;
   }
+
   async addMasterPool(poolKey: string, blockNumber: number): Promise<boolean> {
     this.logger.warn(`addMasterPool ${this.dexmapKey} ${poolKey}`);
     const _pairs = await this.dexHelper.cache.hget(this.dexmapKey, poolKey);
@@ -199,7 +194,7 @@ export class KsElastic
     const pool = await this.getPool(
       poolInfo.token0,
       poolInfo.token1,
-      ToFeeAmount(Number(poolInfo.fee)),
+      BigInt(ToFeeAmount(Number(poolInfo.fee))),
       blockNumber,
     );
 
@@ -215,8 +210,8 @@ export class KsElastic
     side: SwapSide,
     blockNumber: number,
   ): Promise<string[]> {
-    const _srcToken = wrapETH(srcToken, this.network);
-    const _destToken = wrapETH(destToken, this.network);
+    const _srcToken = this.dexHelper.config.wrapETH(srcToken);
+    const _destToken = this.dexHelper.config.wrapETH(destToken);
 
     const [_srcAddress, _destAddress] = this._getLoweredAddresses(
       _srcToken,
@@ -228,7 +223,7 @@ export class KsElastic
     const pools = (
       await Promise.all(
         this.supportedFees.map(async fee =>
-          this.getPool(_srcAddress, _destAddress, fee, blockNumber),
+          this.getPool(_srcAddress, _destAddress, BigInt(fee), blockNumber),
         ),
       )
     ).filter(pool => pool);
@@ -252,8 +247,8 @@ export class KsElastic
     limitPools?: string[],
   ): Promise<null | ExchangePrices<KsElasticData>> {
     try {
-      const _srcToken = wrapETH(srcToken, this.network);
-      const _destToken = wrapETH(destToken, this.network);
+      const _srcToken = this.dexHelper.config.wrapETH(srcToken);
+      const _destToken = this.dexHelper.config.wrapETH(destToken);
 
       const [_srcAddress, _destAddress] = this._getLoweredAddresses(
         _srcToken,
@@ -266,7 +261,7 @@ export class KsElastic
         selectedPools = (
           await Promise.all(
             this.supportedFees.map(async fee =>
-              this.getPool(_srcAddress, _destAddress, fee, blockNumber),
+              this.getPool(_srcAddress, _destAddress, BigInt(fee), blockNumber),
             ),
           )
         ).filter(pool => pool) as KsElasticEventPool[];
@@ -543,7 +538,7 @@ export class KsElastic
         return this.getPool(
           srcAddress,
           destAddress,
-          ToFeeAmount(Number(fee)),
+          BigInt(ToFeeAmount(Number(fee))),
           blockNumber,
         );
       }),

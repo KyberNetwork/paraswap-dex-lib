@@ -2,30 +2,6 @@
   {
     "inputs": [
       {
-        "internalType": "address",
-        "name": "_factory",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "constructor"
-  },
-  {
-    "inputs": [],
-    "name": "factory",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
         "internalType": "bytes",
         "name": "path",
         "type": "bytes"
@@ -128,7 +104,7 @@
           }
         ],
         "internalType": "struct IQuoterV2.QuoteOutput",
-        "name": "output",
+        "name": "",
         "type": "tuple"
       }
     ],
@@ -240,34 +216,11 @@
           }
         ],
         "internalType": "struct IQuoterV2.QuoteOutput",
-        "name": "output",
+        "name": "",
         "type": "tuple"
       }
     ],
     "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "int256",
-        "name": "amount0Delta",
-        "type": "int256"
-      },
-      {
-        "internalType": "int256",
-        "name": "amount1Delta",
-        "type": "int256"
-      },
-      {
-        "internalType": "bytes",
-        "name": "path",
-        "type": "bytes"
-      }
-    ],
-    "name": "swapCallback",
-    "outputs": [],
-    "stateMutability": "view",
     "type": "function"
   }
 ]

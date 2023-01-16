@@ -1,16 +1,5 @@
 [
   {
-    "inputs": [
-      {
-        "internalType": "uint32",
-        "name": "_vestingPeriod",
-        "type": "uint32"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "constructor"
-  },
-  {
     "anonymous": false,
     "inputs": [
       {
@@ -46,44 +35,6 @@
       }
     ],
     "name": "FeeConfigurationUpdated",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": false,
-        "internalType": "address",
-        "name": "_nftManager",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "bool",
-        "name": "added",
-        "type": "bool"
-      }
-    ],
-    "name": "NFTManagerAdded",
-    "type": "event"
-  },
-  {
-    "anonymous": false,
-    "inputs": [
-      {
-        "indexed": false,
-        "internalType": "address",
-        "name": "_nftManager",
-        "type": "address"
-      },
-      {
-        "indexed": false,
-        "internalType": "bool",
-        "name": "removed",
-        "type": "bool"
-      }
-    ],
-    "name": "NFTManagerRemoved",
     "type": "event"
   },
   {
@@ -168,25 +119,6 @@
     "type": "event"
   },
   {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "_nftManager",
-        "type": "address"
-      }
-    ],
-    "name": "addNFTManager",
-    "outputs": [
-      {
-        "internalType": "bool",
-        "name": "added",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
     "inputs": [],
     "name": "configMaster",
     "outputs": [
@@ -264,7 +196,7 @@
     "inputs": [
       {
         "internalType": "uint24",
-        "name": "",
+        "name": "swapFeeUnits",
         "type": "uint24"
       }
     ],
@@ -298,51 +230,20 @@
     "type": "function"
   },
   {
-    "inputs": [],
-    "name": "getCreationCode",
-    "outputs": [
-      {
-        "internalType": "bytes",
-        "name": "",
-        "type": "bytes"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [],
-    "name": "getCreationCodeContracts",
-    "outputs": [
-      {
-        "internalType": "address",
-        "name": "contractA",
-        "type": "address"
-      },
-      {
-        "internalType": "address",
-        "name": "contractB",
-        "type": "address"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
     "inputs": [
       {
         "internalType": "address",
-        "name": "",
+        "name": "tokenA",
         "type": "address"
       },
       {
         "internalType": "address",
-        "name": "",
+        "name": "tokenB",
         "type": "address"
       },
       {
         "internalType": "uint24",
-        "name": "",
+        "name": "swapFeeUnits",
         "type": "uint24"
       }
     ],
@@ -350,7 +251,7 @@
     "outputs": [
       {
         "internalType": "address",
-        "name": "",
+        "name": "pool",
         "type": "address"
       }
     ],
@@ -439,26 +340,7 @@
     "inputs": [
       {
         "internalType": "address",
-        "name": "_nftManager",
-        "type": "address"
-      }
-    ],
-    "name": "removeNFTManager",
-    "outputs": [
-      {
-        "internalType": "bool",
-        "name": "removed",
-        "type": "bool"
-      }
-    ],
-    "stateMutability": "nonpayable",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "address",
-        "name": "_configMaster",
+        "name": "",
         "type": "address"
       }
     ],
@@ -471,12 +353,12 @@
     "inputs": [
       {
         "internalType": "address",
-        "name": "_feeTo",
+        "name": "feeTo",
         "type": "address"
       },
       {
         "internalType": "uint24",
-        "name": "_governmentFeeUnits",
+        "name": "governmentFeeUnits",
         "type": "uint24"
       }
     ],
@@ -489,7 +371,7 @@
     "inputs": [
       {
         "internalType": "uint32",
-        "name": "_vestingPeriod",
+        "name": "",
         "type": "uint32"
       }
     ],

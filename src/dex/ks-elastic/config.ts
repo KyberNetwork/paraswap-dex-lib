@@ -3,7 +3,7 @@ import { DexConfigMap, AdapterMappings } from '../../types';
 import { Network, SwapSide } from '../../constants';
 import { FeeAmount } from './constants';
 
-import { Address } from 'paraswap';
+import { Address } from '../../types';
 
 // const SUPPORTED_FEES = [FeeAmount.HIGH, FeeAmount.MEDIUM, FeeAmount.LOW, FeeAmount.STABLE, FeeAmount.LOWEST];
 const SUPPORTED_FEES = [FeeAmount.MEDIUM];

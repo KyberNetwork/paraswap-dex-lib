@@ -1,11 +1,10 @@
 import { TickInfo } from '../types';
 import { _require } from '../../../utils';
-import invariant from 'tiny-invariant';
 
 export class TickList {
   public static getTick(ticks: readonly TickInfo[], index: number): TickInfo {
     const tick = ticks[this.binarySearch(ticks, index)];
-    invariant(tick.index == index, 'NOT_CONTAINED');
+    _require(tick.index == index, 'NOT_CONTAINED');
     return tick;
   }
 
@@ -35,7 +34,7 @@ export class TickList {
   }
 
   static isBelowSmallest(ticks: readonly TickInfo[], tick: number): boolean {
-    invariant(ticks.length > 0, 'LENGTH');
+    _require(ticks.length > 0, 'LENGTH');
     return tick < ticks[0].index;
   }
 
@@ -43,7 +42,7 @@ export class TickList {
     ticks: readonly TickInfo[],
     tick: number,
   ): boolean {
-    invariant(ticks.length > 0, 'LENGTH');
+    _require(ticks.length > 0, 'LENGTH');
     return tick >= ticks[ticks.length - 1].index;
   }
 
@@ -53,14 +52,14 @@ export class TickList {
     lte: boolean,
   ): TickInfo {
     if (lte) {
-      invariant(!this.isBelowSmallest(ticks, tick), 'BELOW_SMALLEST');
+      _require(!this.isBelowSmallest(ticks, tick), 'BELOW_SMALLEST');
       if (this.isAtOrAboveLargest(ticks, tick)) {
         return ticks[ticks.length - 1];
       }
       const index = this.binarySearch(ticks, tick);
       return ticks[index];
     } else {
-      invariant(!this.isAtOrAboveLargest(ticks, tick), 'AT_OR_ABOVE_LARGEST');
+      _require(!this.isAtOrAboveLargest(ticks, tick), 'AT_OR_ABOVE_LARGEST');
       if (this.isBelowSmallest(ticks, tick)) {
         return ticks[0];
       }
@@ -79,7 +78,7 @@ export class TickList {
     ticks: readonly TickInfo[],
     tick: number,
   ): number {
-    invariant(!this.isBelowSmallest(ticks, tick), 'BELOW_SMALLEST');
+    _require(!this.isBelowSmallest(ticks, tick), 'BELOW_SMALLEST');
 
     let l = 0;
     let r = ticks.length - 1;

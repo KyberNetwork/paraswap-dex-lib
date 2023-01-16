@@ -5,7 +5,6 @@ import { ONE, ZERO } from '../internal-constants';
 import { SqrtPriceMath } from './SqrtPriceMath';
 import { SwapMath } from './SwapMath';
 import { TickList } from './TickList';
-import invariant from 'tiny-invariant';
 
 import { TickMath } from './TickMath';
 import { _require } from '../../../utils';
@@ -72,13 +71,18 @@ class KsElasticMath {
       sqrtPriceLimitX96 = zeroForOne
         ? TickMath.MIN_SQRT_RATIO + ONE
         : TickMath.MAX_SQRT_RATIO - ONE;
-    if (zeroForOne) {
-      invariant(sqrtPriceLimitX96 > TickMath.MIN_SQRT_RATIO, 'RATIO_MIN');
-      invariant(sqrtPriceLimitX96 < poolState.sqrtPriceX96, 'RATIO_CURRENT');
-    } else {
-      invariant(sqrtPriceLimitX96 < TickMath.MAX_SQRT_RATIO, 'RATIO_MAX');
-      invariant(sqrtPriceLimitX96 > poolState.sqrtPriceX96, 'RATIO_CURRENT');
-    }
+
+    _require(
+      zeroForOne
+        ? sqrtPriceLimitX96 < poolState.sqrtPriceX96 &&
+            sqrtPriceLimitX96 > TickMath.MIN_SQRT_RATIO
+        : sqrtPriceLimitX96 > poolState.sqrtPriceX96 &&
+            sqrtPriceLimitX96 < TickMath.MAX_SQRT_RATIO,
+      'SPL',
+      { zeroForOne, sqrtPriceLimitX96, poolState },
+      'zeroForOne ? sqrtPriceLimitX96 < slot0Start.sqrtPriceX96 && sqrtPriceLimitX96 > TickMath.MIN_SQRT_RATIO : sqrtPriceLimitX96 > slot0Start.sqrtPriceX96 && sqrtPriceLimitX96 < TickMath.MAX_SQRT_RATIO',
+    );
+
     const exactInput = amountSpecified >= ZERO;
 
     const state = {

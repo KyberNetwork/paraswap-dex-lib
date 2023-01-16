@@ -2,15 +2,20 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { Interface, Result } from '@ethersproject/abi';
+import { Address } from '@paraswap/core';
+
+import { getLogger } from '../../lib/log4js';
 import { DummyDexHelper } from '../../dex-helper/index';
 import { Network, SwapSide } from '../../constants';
 import { BI_POWS } from '../../bigint-constants';
-import { KsElastic as KssElastic } from './ks-elastic';
 import { checkPoolPrices, checkPoolsLiquidity } from '../../../tests/utils';
 import { Tokens } from '../../../tests/constants-e2e';
-import KsElasticQuoterABI from '../../abi/ks-elastic/Quoter.json';
-import { Address } from '@paraswap/core';
+import KsElasticQuoterABI from '../../abi/ks-elastic/IQuoterV2.json';
 import { bigIntify } from '../../utils';
+
+import { KsElastic as KssElastic } from './ks-elastic';
+
+const logger = getLogger('UniswapV3MeasureScript');
 
 const network = Network.POLYGON;
 const TokenASymbol = 'USDC';
@@ -82,7 +87,7 @@ async function checkOnChainPricing(
   const sum = prices.reduce((acc, curr) => (acc += curr), 0n);
 
   if (sum === 0n) {
-    console.log(
+    logger.info(
       `Prices were not calculated for tokenIn=${tokenIn}, tokenOut=${tokenOut}, fee=${fee.toString()}. Most likely price impact is too big for requested amount`,
     );
     return false;
@@ -106,7 +111,7 @@ async function checkOnChainPricing(
         .call({}, blockNumber)
     ).returnData;
   } catch (e) {
-    console.log(
+    logger.info(
       `Can not fetch on-chain pricing for fee ${fee}. It happens for low liquidity pools`,
       e,
     );
@@ -151,7 +156,7 @@ describe('KsElastic', function () {
       SwapSide.SELL,
       blockNumber,
     );
-    console.log(`${TokenASymbol} <> ${TokenBSymbol} Pool Identifiers: `, pools);
+    logger.info(`${TokenASymbol} <> ${TokenBSymbol} Pool Identifiers: `, pools);
 
     expect(pools.length).toBeGreaterThan(0);
 
@@ -163,7 +168,7 @@ describe('KsElastic', function () {
       blockNumber,
       pools,
     );
-    console.log(`${TokenASymbol} <> ${TokenBSymbol} Pool Prices: `, poolPrices);
+    logger.info(`${TokenASymbol} <> ${TokenBSymbol} Pool Prices: `, poolPrices);
 
     expect(poolPrices).not.toBeNull();
     checkPoolPrices(poolPrices!, amounts, SwapSide.SELL, dexKey);
@@ -196,7 +201,7 @@ describe('KsElastic', function () {
   //     SwapSide.BUY,
   //     blockNumber,
   //   );
-  //   console.log(`${TokenASymbol} <> ${TokenBSymbol} Pool Identifiers: `, pools);
+  //   logger.info(`${TokenASymbol} <> ${TokenBSymbol} Pool Identifiers: `, pools);
 
   //   expect(pools.length).toBeGreaterThan(0);
 
@@ -208,7 +213,7 @@ describe('KsElastic', function () {
   //     blockNumber,
   //     pools,
   //   );
-  //   console.log(`${TokenASymbol} <> ${TokenBSymbol} Pool Prices: `, poolPrices);
+  //   logger.info(`${TokenASymbol} <> ${TokenBSymbol} Pool Prices: `, poolPrices);
 
   //   expect(poolPrices).not.toBeNull();
   //   checkPoolPrices(poolPrices!, amountsBuy, SwapSide.BUY, dexKey);
@@ -301,7 +306,7 @@ describe('KsElastic', function () {
   //     SwapSide.SELL,
   //     blockNumber,
   //   );
-  //   console.log(`${TokenASymbol} <> ${TokenBSymbol} Pool Identifiers: `, pools);
+  //   logger.info(`${TokenASymbol} <> ${TokenBSymbol} Pool Identifiers: `, pools);
 
   //   expect(pools.length).toBeGreaterThan(0);
 
@@ -313,7 +318,7 @@ describe('KsElastic', function () {
   //     blockNumber,
   //     pools,
   //   );
-  //   console.log(`${TokenASymbol} <> ${TokenBSymbol} Pool Prices: `, poolPrices);
+  //   logger.info(`${TokenASymbol} <> ${TokenBSymbol} Pool Prices: `, poolPrices);
 
   //   expect(poolPrices).not.toBeNull();
   //   checkPoolPrices(
@@ -411,7 +416,7 @@ describe('KsElastic', function () {
   //     SwapSide.BUY,
   //     blockNumber,
   //   );
-  //   console.log(`${TokenASymbol} <> ${TokenBSymbol} Pool Identifiers: `, pools);
+  //   logger.info(`${TokenASymbol} <> ${TokenBSymbol} Pool Identifiers: `, pools);
 
   //   expect(pools.length).toBeGreaterThan(0);
 
@@ -423,7 +428,7 @@ describe('KsElastic', function () {
   //     blockNumber,
   //     pools,
   //   );
-  //   console.log(`${TokenASymbol} <> ${TokenBSymbol} Pool Prices: `, poolPrices);
+  //   logger.info(`${TokenASymbol} <> ${TokenBSymbol} Pool Prices: `, poolPrices);
 
   //   expect(poolPrices).not.toBeNull();
   //   checkPoolPrices(
@@ -459,7 +464,7 @@ describe('KsElastic', function () {
       Tokens[Network.MAINNET]['USDC'].address,
       10,
     );
-    console.log(`${TokenASymbol} Top Pools:`, poolLiquidity);
+    logger.info(`${TokenASymbol} Top Pools:`, poolLiquidity);
 
     if (!KsElastic.hasConstantPriceLargeAmounts) {
       checkPoolsLiquidity(poolLiquidity, TokenA.address, dexKey);
