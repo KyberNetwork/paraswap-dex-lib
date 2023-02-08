@@ -1,4 +1,4 @@
-import { FeeAmount } from './constants';
+import { FeeTiers } from './constants';
 import { NumberAsString } from '../../types';
 import { Address } from '../../types';
 
@@ -13,10 +13,9 @@ export type TickInfo = {
 };
 
 export type PoolState = {
-  // blockTimestamp: bigint;
   pool: string;
   tickSpacing: bigint;
-  fee: FeeAmount;
+  fee: FeeTiers | bigint;
   sqrtPriceX96: bigint;
   liquidity: bigint;
   ticks: Record<NumberAsString, TickInfo>;
@@ -35,10 +34,11 @@ export type KsElasticData = {
 
 export type DexParams = {
   router: Address;
+  quoter: Address;
   factory: Address;
-  tickReader: Address;
-  supportedFees: FeeAmount[];
-  multiCall: Address;
+  ticksFeesReader: Address;
+  supportedFees: FeeTiers[];
+  chunksCount: number;
 };
 
 export type KsElasticSellParam = {
@@ -60,8 +60,8 @@ export type KsElasticBuyParam = {
 export type KsElasticParam = KsElasticSellParam | KsElasticBuyParam;
 
 export enum KsElasticFunctions {
-  exactInput = 'swapExactInput',
-  exactOutput = 'swapExactOutput',
+  exactInput = 'exactInput',
+  exactOutput = 'exactOutput',
 }
 
 export type TickInfoMappings = {
@@ -72,4 +72,9 @@ export type TickInfoMappings = {
 export type TickBitMapMappings = {
   index: number;
   value: bigint;
+};
+
+export type OutputResult = {
+  outputs: bigint[];
+  tickCounts: number[];
 };

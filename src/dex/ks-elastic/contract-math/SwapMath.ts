@@ -1,38 +1,38 @@
-import { FeeAmount } from '../constants';
-
-import { FullMath } from './FullMath';
+import { FeeTiers, FEE_UNITS, TWO_FEE_UNITS } from '../constants';
 import { Q96, ZERO } from '../internal-constants';
-import { bigIntify } from '../../../utils';
-
-const FEE_UNITS = 100000n;
-const TWO_FEE_UNITS = FEE_UNITS + FEE_UNITS;
+import { FullMath } from './FullMath';
 
 export class SwapMath {
-  public static computeSwapStepPromm(
+  static computeSwapStep(
     sqrtRatioCurrentX96: bigint,
     sqrtRatioTargetX96: bigint,
     liquidity: bigint,
     amountRemaining: bigint,
-    feePips: FeeAmount,
-    exactIn: boolean,
-    zeroForOne: boolean,
-  ): [bigint, bigint, bigint, bigint] {
-    const returnValues = {
-      sqrtRatioNextX96: 0n,
-      amountIn: 0n,
-      amountOut: 0n,
-      deltaL: 0n,
-    };
+    fee: FeeTiers | bigint,
+  ): {
+    sqrtRatioNextX96: bigint;
+    amountIn: bigint;
+    amountOut: bigint;
+    deltaL: bigint;
+  } {
+    const zeroForOne = sqrtRatioCurrentX96 >= sqrtRatioTargetX96;
+    const exactIn = amountRemaining >= 0n;
+
+    let sqrtRatioNextX96 = 0n;
+    let amountIn = 0n;
+    let amountOut = 0n;
+    let deltaL = 0n;
 
     if (sqrtRatioCurrentX96 == sqrtRatioTargetX96) {
-      return [sqrtRatioCurrentX96, 0n, 0n, 0n];
+      sqrtRatioNextX96 = sqrtRatioCurrentX96;
+      return { sqrtRatioNextX96, amountIn, amountOut, deltaL };
     }
 
     let usedAmount = SwapMath.calcReachAmount(
       sqrtRatioCurrentX96,
       sqrtRatioTargetX96,
       liquidity,
-      feePips,
+      fee,
       exactIn,
       zeroForOne,
     );
@@ -43,33 +43,33 @@ export class SwapMath {
     ) {
       usedAmount = amountRemaining;
     } else {
-      returnValues.sqrtRatioNextX96 = sqrtRatioTargetX96;
+      sqrtRatioNextX96 = sqrtRatioTargetX96;
     }
-    returnValues.amountIn = usedAmount;
+    amountIn = usedAmount;
 
     const absUsedAmount = usedAmount >= 0n ? usedAmount : -usedAmount;
 
-    if (returnValues.sqrtRatioNextX96 == 0n) {
+    if (sqrtRatioNextX96 == 0n) {
       //last step
-      returnValues.deltaL = SwapMath.estimateIncrementalLiquidity(
+      deltaL = SwapMath.estimateIncrementalLiquidity(
         absUsedAmount,
         liquidity,
         sqrtRatioCurrentX96,
-        feePips,
+        fee,
         exactIn,
         zeroForOne,
       );
 
-      returnValues.sqrtRatioNextX96 = SwapMath.calcFinalPrice(
+      sqrtRatioNextX96 = SwapMath.calcFinalPrice(
         absUsedAmount,
         liquidity,
-        returnValues.deltaL,
+        deltaL,
         sqrtRatioCurrentX96,
         exactIn,
         zeroForOne,
       );
     } else {
-      returnValues.deltaL = SwapMath.calcIncrementalLiquidity(
+      deltaL = SwapMath.calcIncrementalLiquidity(
         sqrtRatioCurrentX96,
         sqrtRatioTargetX96,
         liquidity,
@@ -79,31 +79,27 @@ export class SwapMath {
       );
     }
 
-    returnValues.amountOut = SwapMath.calcReturnedAmount(
+    amountOut = SwapMath.calcReturnedAmount(
       sqrtRatioCurrentX96,
-      returnValues.sqrtRatioNextX96,
+      sqrtRatioNextX96,
       liquidity,
-      returnValues.deltaL,
+      deltaL,
       exactIn,
       zeroForOne,
     );
 
-    return [
-      returnValues.sqrtRatioNextX96,
-      returnValues.amountIn,
-      returnValues.amountOut,
-      returnValues.deltaL,
-    ];
+    return { sqrtRatioNextX96, amountIn, amountOut, deltaL };
   }
 
   public static calcReachAmount(
     sqrtRatioCurrentX96: bigint,
     sqrtRatioTargetX96: bigint,
     liquidity: bigint,
-    feePips: FeeAmount,
+    fee: FeeTiers | bigint,
     exactIn: boolean,
     zeroForOne: boolean,
   ) {
+    fee = BigInt(fee);
     const absPriceDiff =
       sqrtRatioCurrentX96 >= sqrtRatioTargetX96
         ? sqrtRatioCurrentX96 - sqrtRatioTargetX96
@@ -114,8 +110,7 @@ export class SwapMath {
       if (zeroForOne) {
         //exactInput + swap 0 -> 1
         const denominator =
-          TWO_FEE_UNITS * sqrtRatioTargetX96 -
-          bigIntify(feePips) * sqrtRatioCurrentX96;
+          TWO_FEE_UNITS * sqrtRatioTargetX96 - fee * sqrtRatioCurrentX96;
         const numerator = FullMath.mulDiv(
           liquidity,
           TWO_FEE_UNITS * absPriceDiff,
@@ -125,8 +120,7 @@ export class SwapMath {
       } else {
         //exactInput + swap 1 -> 0
         const denominator =
-          TWO_FEE_UNITS * sqrtRatioCurrentX96 -
-          bigIntify(feePips) * sqrtRatioTargetX96;
+          TWO_FEE_UNITS * sqrtRatioCurrentX96 - fee * sqrtRatioTargetX96;
         const numerator = FullMath.mulDiv(
           liquidity,
           TWO_FEE_UNITS * absPriceDiff,
@@ -138,9 +132,8 @@ export class SwapMath {
       if (zeroForOne) {
         //exactOut + swap 0 -> 1
         const denominator =
-          TWO_FEE_UNITS * sqrtRatioCurrentX96 -
-          bigIntify(feePips) * sqrtRatioTargetX96;
-        let numerator = denominator - bigIntify(feePips) * sqrtRatioCurrentX96;
+          TWO_FEE_UNITS * sqrtRatioCurrentX96 - fee * sqrtRatioTargetX96;
+        let numerator = denominator - fee * sqrtRatioCurrentX96;
         numerator = FullMath.mulDiv(liquidity << 96n, numerator, denominator);
         reachAmount =
           FullMath.mulDiv(numerator, absPriceDiff, sqrtRatioCurrentX96) /
@@ -148,9 +141,8 @@ export class SwapMath {
         reachAmount = -reachAmount;
       } else {
         const denominator =
-          TWO_FEE_UNITS * sqrtRatioTargetX96 -
-          bigIntify(feePips) * sqrtRatioCurrentX96;
-        let numerator = denominator - bigIntify(feePips) * sqrtRatioTargetX96;
+          TWO_FEE_UNITS * sqrtRatioTargetX96 - fee * sqrtRatioCurrentX96;
+        let numerator = denominator - fee * sqrtRatioTargetX96;
         numerator = FullMath.mulDiv(liquidity, numerator, denominator);
         reachAmount = FullMath.mulDiv(numerator, absPriceDiff, Q96);
         reachAmount = -reachAmount;
@@ -213,7 +205,7 @@ export class SwapMath {
       const tmp1 = FullMath.mulDiv(liquidity, Q96, sqrtRatioCurrentX96);
       const tmp2 = exactIn ? tmp1 + absAmount : tmp1 - absAmount;
       const tmp3 = FullMath.mulDiv(sqrtRatioTargetX96, tmp2, Q96);
-      return tmp3 > liquidity ? bigIntify(tmp3) - bigIntify(liquidity) : ZERO;
+      return tmp3 > liquidity ? tmp3 - liquidity : ZERO;
     } else {
       const tmp1 = FullMath.mulDiv(liquidity, sqrtRatioCurrentX96, Q96);
       const tmp2 = exactIn ? tmp1 + absAmount : tmp1 - absAmount;
@@ -226,13 +218,13 @@ export class SwapMath {
     absAmount: bigint,
     liquidity: bigint,
     sqrtRatioCurrentX96: bigint,
-    feePips: FeeAmount,
+    fee: FeeTiers | bigint,
     exactIn: boolean,
     zeroForOne: boolean,
   ): bigint {
     // this is when we didn't reach the target (last step before loop end), then we have to recalculate the target_X96, deltaL ...
     let deltaL;
-    let fee = bigIntify(feePips);
+    fee = BigInt(fee);
     if (exactIn) {
       if (zeroForOne) {
         // deltaL = feeInFEE_UNITS * absDelta * currentSqrtP / 2

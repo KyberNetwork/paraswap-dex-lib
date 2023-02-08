@@ -1,6 +1,10 @@
-import { Interface } from '@ethersproject/abi';
 import _ from 'lodash';
+import { Contract } from 'web3-eth-contract';
+import { AbiItem } from 'web3-utils';
+import { DeepReadonly } from 'ts-essentials';
 import { pack } from '@ethersproject/solidity';
+import { defaultAbiCoder, Interface } from '@ethersproject/abi';
+
 import {
   Token,
   Address,
@@ -13,32 +17,39 @@ import {
   PoolPrices,
 } from '../../types';
 import { SwapSide, Network } from '../../constants';
+import * as CALLDATA_GAS_COST from '../../calldata-gas-cost';
 import { getBigIntPow, getDexKeysWithNetwork, interpolate } from '../../utils';
 import { IDex } from '../../dex/idex';
 import { IDexHelper } from '../../dex-helper/idex-helper';
+import { SimpleExchange } from '../simple-exchange';
+
+import {
+  AssetType,
+  DEFAULT_ID_ERC20,
+  DEFAULT_ID_ERC20_AS_STRING,
+} from '../../lib/tokens/types';
+import KsElasticRouterABI from '../../abi/ks-elastic/IRouter.json';
+import KsElasticQuoterABI from '../../abi/ks-elastic/IQuoterV2.json';
+import MultiCallABI from '../../abi/multi-v2.json';
+import { BalanceRequest, getBalances } from '../../lib/tokens/balancer-fetcher';
+
+import {
+  KS_ELASTIC_EFFICIENCY_FACTOR,
+  KS_ELASTIC_SUBGRAPH_URL,
+  // KS_ELASTIC_FUNCTION_CALL_GAS_COST,
+  // KS_ELASTIC_TICK_GAS_COST,
+} from './constants';
 import {
   DexParams,
+  OutputResult,
   PoolState,
   KsElasticData,
   KsElasticFunctions,
   KsElasticParam,
 } from './types';
-import { SimpleExchange } from '../simple-exchange';
-import * as CALLDATA_GAS_COST from '../../calldata-gas-cost';
-
-import { KsElasticConfig, Adapters, PoolsToPreload } from './config';
-import { KsElasticEventPool } from './ks-elastic-pool';
-import KsElasticRouterABI from '../../abi/ks-elastic/IRouter.json';
-
-import {
-  KS_ELASTIC_EFFICIENCY_FACTOR,
-  KS_ELASTIC_QUOTE_GASLIMIT,
-  KS_ELASTIC_SUBGRAPH_URL,
-  FeeAmount,
-  ToFeeAmount,
-} from './constants';
-import { DeepReadonly } from 'ts-essentials';
 import { ksElasticMath } from './contract-math/ks-elastic-math';
+import { KsElasticEventPool } from './ks-elastic-pool';
+import { KsElasticConfig, Adapters, PoolsToPreload } from './config';
 import { PoolNotFoundError } from './errors';
 
 type PoolPairsInfo = {
@@ -47,10 +58,14 @@ type PoolPairsInfo = {
   fee: string;
 };
 
+const KS_ELASTIC_QUOTE_GASLIMIT = 200_000;
+
 export class KsElastic
   extends SimpleExchange
   implements IDex<KsElasticData, KsElasticParam>
 {
+  private multicallContract: Contract;
+
   readonly eventPools: Record<string, KsElasticEventPool | null> = {};
   readonly isFeeOnTransferSupported: boolean = false;
 
@@ -68,17 +83,22 @@ export class KsElastic
     protected dexHelper: IDexHelper,
     protected adapters = Adapters[network] || {},
     readonly routerIface = new Interface(KsElasticRouterABI),
+    readonly quoterIface = new Interface(KsElasticQuoterABI),
     protected config = KsElasticConfig[dexKey][network],
     protected poolsToPreload = PoolsToPreload[dexKey][network] || [],
   ) {
     super(dexHelper, dexKey);
-    this.logger = dexHelper.getLogger(dexKey);
-
+    this.logger = dexHelper.getLogger(dexKey + '-' + network);
     // To receive revert reasons
     this.dexHelper.web3Provider.eth.handleRevert = false;
 
     // Normalise once all config addresses and use across all scenarios
     this.config = this._toLowerForAllConfigAddresses();
+
+    this.multicallContract = new this.dexHelper.web3Provider.eth.Contract(
+      MultiCallABI as AbiItem[],
+      this.dexHelper.config.data.multicallV2Address,
+    );
   }
 
   get supportedFees() {
@@ -89,7 +109,11 @@ export class KsElastic
     return this.adapters[side] ? this.adapters[side] : null;
   }
 
-  getPoolIdentifier(srcAddress: Address, destAddress: Address, fee: bigint) {
+  getPoolIdentifier(
+    srcAddress: Address,
+    destAddress: Address,
+    fee: bigint | number,
+  ) {
     const tokenAddresses = this._sortTokens(srcAddress, destAddress).join('_');
     return `${this.dexKey}_${tokenAddresses}_${fee}`;
   }
@@ -111,7 +135,7 @@ export class KsElastic
   async getPool(
     srcAddress: Address,
     destAddress: Address,
-    fee: bigint,
+    fee: bigint | number,
     blockNumber: number,
   ): Promise<KsElasticEventPool | null> {
     let pool =
@@ -133,15 +157,11 @@ export class KsElastic
       this.logger.trace(`starting to listen to new pool: ${key}`);
       pool = new KsElasticEventPool(
         this.dexKey,
-        this.network,
         this.dexHelper,
         this.logger,
-        this.config.tickReader,
-        this.config.factory,
-        Number(fee.toString()),
+        BigInt(fee),
         token0,
         token1,
-        this.config.multiCall,
         0n,
         this.cacheStateKey,
       );
@@ -180,11 +200,10 @@ export class KsElastic
   }
 
   async addMasterPool(poolKey: string, blockNumber: number): Promise<boolean> {
-    this.logger.warn(`addMasterPool ${this.dexmapKey} ${poolKey}`);
     const _pairs = await this.dexHelper.cache.hget(this.dexmapKey, poolKey);
     if (!_pairs) {
       this.logger.warn(
-        `did not find poolconfig in for key ${this.dexmapKey} ${poolKey}`,
+        `did not find poolConfig in for key ${this.dexmapKey} ${poolKey}`,
       );
       return false;
     }
@@ -194,7 +213,7 @@ export class KsElastic
     const pool = await this.getPool(
       poolInfo.token0,
       poolInfo.token1,
-      BigInt(ToFeeAmount(Number(poolInfo.fee))),
+      BigInt(poolInfo.fee),
       blockNumber,
     );
 
@@ -204,6 +223,7 @@ export class KsElastic
 
     return true;
   }
+
   async getPoolIdentifiers(
     srcToken: Token,
     destToken: Token,
@@ -223,19 +243,152 @@ export class KsElastic
     const pools = (
       await Promise.all(
         this.supportedFees.map(async fee =>
-          this.getPool(_srcAddress, _destAddress, BigInt(fee), blockNumber),
+          this.getPool(_srcAddress, _destAddress, fee, blockNumber),
         ),
       )
     ).filter(pool => pool);
 
     if (pools.length === 0) return [];
-    return pools.map(pool => {
-      var fee = 0n;
-      if (pool !== null) {
-        fee = BigInt(pool.fee);
+
+    return pools.map(pool =>
+      this.getPoolIdentifier(_srcAddress, _destAddress, pool!.fee),
+    );
+  }
+
+  async getPricingFromRpc(
+    from: Token,
+    to: Token,
+    amounts: bigint[],
+    side: SwapSide,
+    pools: KsElasticEventPool[],
+  ): Promise<ExchangePrices<KsElasticData> | null> {
+    if (pools.length === 0) {
+      return null;
+    }
+    this.logger.warn(`fallback to rpc for ${pools.length} pool(s)`);
+
+    const requests = pools.map<BalanceRequest>(
+      pool => ({
+        owner: pool.poolAddress,
+        asset: side == SwapSide.SELL ? from.address : to.address,
+        assetType: AssetType.ERC20,
+        ids: [
+          {
+            id: DEFAULT_ID_ERC20,
+            spenders: [],
+          },
+        ],
+      }),
+      [],
+    );
+
+    const balances = await getBalances(this.dexHelper.multiWrapper, requests);
+
+    pools = pools.filter((pool, index) => {
+      const balance = balances[index].amounts[DEFAULT_ID_ERC20_AS_STRING];
+      if (balance >= amounts[amounts.length - 1]) {
+        return true;
       }
-      return this.getPoolIdentifier(_srcAddress, _destAddress, fee);
+      this.logger.warn(
+        `[${this.network}][${pool.parentName}] have no balance ${pool.poolAddress} ${from.address} ${to.address}. (Balance: ${balance})`,
+      );
+      return false;
     });
+
+    pools.forEach(pool => {
+      this.logger.warn(
+        `[${this.network}][${pool.parentName}] fallback to rpc for ${pool.name}`,
+      );
+    });
+
+    const unitVolume = getBigIntPow(
+      (side === SwapSide.SELL ? from : to).decimals,
+    );
+
+    const chunks = amounts.length - 1;
+
+    const _width = Math.floor(chunks / this.config.chunksCount);
+
+    const _amounts = [unitVolume].concat(
+      Array.from(Array(this.config.chunksCount).keys()).map(
+        i => amounts[(i + 1) * _width],
+      ),
+    );
+
+    const calldata = pools.map(pool =>
+      _amounts.map(_amount => ({
+        target: this.config.quoter,
+        gasLimit: KS_ELASTIC_QUOTE_GASLIMIT,
+        callData:
+          side === SwapSide.SELL
+            ? this.quoterIface.encodeFunctionData('quoteExactInputSingle', [
+                from.address,
+                to.address,
+                pool.fee.toString(),
+                _amount.toString(),
+                0, //sqrtPriceLimitX96
+              ])
+            : this.quoterIface.encodeFunctionData('quoteExactOutputSingle', [
+                from.address,
+                to.address,
+                pool.fee.toString(),
+                _amount.toString(),
+                0, //sqrtPriceLimitX96
+              ]),
+      })),
+    );
+
+    const data = await this.multicallContract.methods
+      .multicall(calldata.flat())
+      .call();
+
+    const decode = (j: number): bigint => {
+      if (!data.returnData[j].success) {
+        return 0n;
+      }
+      const decoded = defaultAbiCoder.decode(
+        ['uint256'],
+        data.returnData[j].returnData,
+      );
+      return BigInt(decoded[0].toString());
+    };
+
+    let i = 0;
+    const result = pools.map(pool => {
+      const _rates = _amounts.map(() => decode(i++));
+      const unit: bigint = _rates[0];
+
+      const prices = interpolate(
+        _amounts.slice(1),
+        _rates.slice(1),
+        amounts,
+        side,
+      );
+
+      return {
+        prices,
+        unit,
+        data: {
+          path: [
+            {
+              tokenIn: from.address,
+              tokenOut: to.address,
+              fee: pool.fee.toString(),
+            },
+          ],
+        },
+        poolIdentifier: this.getPoolIdentifier(
+          pool.token0,
+          pool.token1,
+          pool.fee,
+        ),
+        exchange: this.dexKey,
+        gasCost: prices.map(p => (p === 0n ? 0 : KS_ELASTIC_QUOTE_GASLIMIT)),
+        poolAddresses: [pool.poolAddress],
+      };
+    });
+
+    return result;
   }
 
   async getPricesVolume(
@@ -254,17 +407,28 @@ export class KsElastic
         _srcToken,
         _destToken,
       );
+
       if (_srcAddress === _destAddress) return null;
 
       let selectedPools: KsElasticEventPool[] = [];
-      if (limitPools === undefined) {
-        selectedPools = (
-          await Promise.all(
-            this.supportedFees.map(async fee =>
-              this.getPool(_srcAddress, _destAddress, BigInt(fee), blockNumber),
-            ),
-          )
-        ).filter(pool => pool) as KsElasticEventPool[];
+      if (!limitPools) {
+        for (const fee of this.supportedFees) {
+          let pool =
+            this.eventPools[
+              this.getPoolIdentifier(_srcAddress, _destAddress, fee)
+            ];
+          if (!pool) {
+            pool = await this.getPool(
+              _srcAddress,
+              _destAddress,
+              fee,
+              blockNumber,
+            );
+          }
+          if (pool) {
+            selectedPools.push(pool);
+          }
+        }
       } else {
         const pairIdentifierWithoutFee = this.getPoolIdentifier(
           _srcAddress,
@@ -272,74 +436,157 @@ export class KsElastic
           0n,
           // Trim from 0 fee postfix, so it become comparable
         ).slice(0, -1);
-        selectedPools = await this._getPoolsFromIdentifiers(
-          limitPools.filter(identifier =>
-            identifier.startsWith(pairIdentifierWithoutFee),
-          ),
-          blockNumber,
+
+        const poolIdentifiers = limitPools.filter(identifier =>
+          identifier.startsWith(pairIdentifierWithoutFee),
         );
+        for (const identifier of poolIdentifiers) {
+          let pool = this.eventPools[identifier];
+          if (!pool) {
+            const [, srcAddress, destAddress, fee] = identifier.split('_');
+            pool = await this.getPool(
+              srcAddress,
+              destAddress,
+              BigInt(fee),
+              blockNumber,
+            );
+          }
+
+          if (pool) {
+            selectedPools.push(pool);
+          }
+        }
       }
 
       if (selectedPools.length === 0) return null;
-      const states = await Promise.all(
-        selectedPools.map(async pool => {
-          let state = pool.getState(blockNumber);
-          if (state === null || !state.isValid) {
-            if (state === null) {
-              this.logger.trace(
-                `${this.dexKey}: State === null. Generating new one`,
-              );
-            } else if (!state.isValid) {
-              this.logger.trace(
-                `${this.dexKey}: State is invalid. Generating new one`,
-              );
-            }
 
-            state = await pool.generateState(blockNumber);
-            pool.setState(state, blockNumber);
+      const poolsToUse = selectedPools.reduce(
+        (acc, pool) => {
+          let state = pool.getState(blockNumber);
+          if (state === null) {
+            this.logger.trace(
+              `${this.dexKey}: State === null. Fallback to rpc ${pool.name}`,
+            );
+            acc.poolWithoutState.push(pool);
+          } else {
+            acc.poolWithState.push(pool);
           }
-          return state;
-        }),
+          return acc;
+        },
+        {
+          poolWithState: [] as KsElasticEventPool[],
+          poolWithoutState: [] as KsElasticEventPool[],
+        },
       );
+
+      const rpcResultsPromise = this.getPricingFromRpc(
+        _srcToken,
+        _destToken,
+        amounts,
+        side,
+        poolsToUse.poolWithoutState,
+      );
+
+      const states = poolsToUse.poolWithState.map(
+        p => p.getState(blockNumber)!,
+      );
+
       const unitAmount = getBigIntPow(
         side == SwapSide.SELL ? _srcToken.decimals : _destToken.decimals,
       );
 
-      const _amounts = [unitAmount, ...amounts.slice(1)];
+      const _amounts = [...amounts.slice(1)];
 
       const [token0] = this._sortTokens(_srcAddress, _destAddress);
 
       const zeroForOne = token0 === _srcAddress ? true : false;
 
-      const result = selectedPools.map((pool, i) => {
-        const state = states[i];
-        const prices = this._getOutputs(state, _amounts, zeroForOne, side);
-        if (!prices) {
-          throw new Error('Prices or unit is not calculated');
-        }
-        return {
-          unit: prices[0],
-          prices: prices,
-          data: {
-            path: [
-              {
-                tokenIn: _srcAddress,
-                tokenOut: _destAddress,
-                fee: pool.fee.toString(),
-              },
-            ],
-          },
-          poolIdentifier: this.getPoolIdentifier(
-            pool.token0,
-            pool.token1,
-            BigInt(pool.fee),
-          ),
-          exchange: this.dexKey,
-          gasCost: KS_ELASTIC_QUOTE_GASLIMIT,
-          poolAddresses: [pool.poolAddress],
-        };
-      });
-      return result;
+      const result = await Promise.all(
+        poolsToUse.poolWithState.map(async (pool, i) => {
+          const state = states[i];
+
+          if (state.liquidity <= 0n) {
+            this.logger.trace(`pool have 0 liquidity`);
+            return null;
+          }
+
+          const balanceDestToken =
+            _destAddress === pool.token0
+              ? await pool.getBalanceToken0(blockNumber)
+              : await pool.getBalanceToken1(blockNumber);
+
+          const unitResult = this._getOutputs(
+            state,
+            [unitAmount],
+            zeroForOne,
+            side,
+            balanceDestToken,
+          );
+          const pricesResult = this._getOutputs(
+            state,
+            _amounts,
+            zeroForOne,
+            side,
+            balanceDestToken,
+          );
+
+          if (!unitResult || !pricesResult) {
+            this.logger.debug('Prices or unit is not calculated');
+            return null;
+          }
+
+          const prices = [0n, ...pricesResult.outputs];
+          // const gasCost = [
+          //   0,
+          //   ...pricesResult.outputs.map((p, index) => {
+          //     if (p == 0n) {
+          //       return 0;
+          //     } else {
+          //       return (
+          //         KS_ELASTIC_FUNCTION_CALL_GAS_COST +
+          //         pricesResult.tickCounts[index] * KS_ELASTIC_TICK_GAS_COST
+          //       );
+          //     }
+          //   }),
+          // ];
+          return {
+            unit: unitResult.outputs[0],
+            prices,
+            data: {
+              path: [
+                {
+                  tokenIn: _srcAddress,
+                  tokenOut: _destAddress,
+                  fee: pool.fee.toString(),
+                },
+              ],
+            },
+            poolIdentifier: this.getPoolIdentifier(
+              pool.token0,
+              pool.token1,
+              pool.fee,
+            ),
+            exchange: this.dexKey,
+            gasCost: KS_ELASTIC_QUOTE_GASLIMIT,
+            poolAddresses: [pool.poolAddress],
+          };
+        }),
+      );
+      const rpcResults = await rpcResultsPromise;
+
+      const notNullResult = result.filter(
+        res => res !== null,
+      ) as ExchangePrices<KsElasticData>;
+
+      if (rpcResults) {
+        rpcResults.forEach(r => {
+          if (r) {
+            notNullResult.push(r);
+          }
+        });
+      }
+
+      return notNullResult;
     } catch (e) {
       this.logger.error(
         `Error_getPricesVolume ${srcToken.symbol || srcToken.address}, ${
@@ -350,30 +597,7 @@ export class KsElastic
       return null;
     }
   }
-  getCalldataGasCost(poolPrices: PoolPrices<KsElasticData>): number | number[] {
-    const gasCost =
-      CALLDATA_GAS_COST.DEX_OVERHEAD +
-      CALLDATA_GAS_COST.LENGTH_SMALL +
-      // ParentStruct header
-      CALLDATA_GAS_COST.OFFSET_SMALL +
-      // ParentStruct -> path header
-      CALLDATA_GAS_COST.OFFSET_SMALL +
-      // ParentStruct -> deadline
-      CALLDATA_GAS_COST.TIMESTAMP +
-      // ParentStruct -> path (20+3+20 = 43 = 32+11 bytes)
-      CALLDATA_GAS_COST.LENGTH_SMALL +
-      CALLDATA_GAS_COST.FULL_WORD +
-      CALLDATA_GAS_COST.wordNonZeroBytes(11);
-    const arr = new Array(poolPrices.prices.length);
-    poolPrices.prices.forEach((p, index) => {
-      if (p == 0n) {
-        arr[index] = 0;
-      } else {
-        arr[index] = gasCost;
-      }
-    });
-    return arr;
-  }
+
   getAdapterParam(
     srcToken: string,
     destToken: string,
@@ -397,11 +621,37 @@ export class KsElastic
         deadline: this.getDeadline(),
       },
     );
+
     return {
       targetExchange: this.config.router,
       payload,
       networkFee: '0',
     };
+  }
+
+  getCalldataGasCost(poolPrices: PoolPrices<KsElasticData>): number | number[] {
+    const gasCost =
+      CALLDATA_GAS_COST.DEX_OVERHEAD +
+      CALLDATA_GAS_COST.LENGTH_SMALL +
+      // ParentStruct header
+      CALLDATA_GAS_COST.OFFSET_SMALL +
+      // ParentStruct -> path header
+      CALLDATA_GAS_COST.OFFSET_SMALL +
+      // ParentStruct -> deadline
+      CALLDATA_GAS_COST.TIMESTAMP +
+      // ParentStruct -> path (20+3+20 = 43 = 32+11 bytes)
+      CALLDATA_GAS_COST.LENGTH_SMALL +
+      CALLDATA_GAS_COST.FULL_WORD +
+      CALLDATA_GAS_COST.wordNonZeroBytes(11);
+    const arr = new Array(poolPrices.prices.length);
+    poolPrices.prices.forEach((p, index) => {
+      if (p == 0n) {
+        arr[index] = 0;
+      } else {
+        arr[index] = gasCost;
+      }
+    });
+    return arr;
   }
 
   async getSimpleParam(
@@ -437,6 +687,7 @@ export class KsElastic
     const swapData = this.routerIface.encodeFunctionData(swapFunction, [
       swapFunctionParams,
     ]);
+
     return this.buildSimpleParamWithoutWETHConversion(
       srcToken,
       srcAmount,
@@ -534,13 +785,7 @@ export class KsElastic
     const pools = await Promise.all(
       poolIdentifiers.map(async identifier => {
         const [, srcAddress, destAddress, fee] = identifier.split('_');
-
-        return this.getPool(
-          srcAddress,
-          destAddress,
-          BigInt(ToFeeAmount(Number(fee))),
-          blockNumber,
-        );
+        return this.getPool(srcAddress, destAddress, BigInt(fee), blockNumber);
       }),
     );
     return pools.filter(pool => pool) as KsElasticEventPool[];
@@ -558,10 +803,11 @@ export class KsElastic
     // If new config property will be added, the TS will throw compile error
     const newConfig: DexParams = {
       router: this.config.router.toLowerCase(),
+      quoter: this.config.quoter.toLowerCase(),
       factory: this.config.factory.toLowerCase(),
       supportedFees: this.config.supportedFees,
-      tickReader: this.config.tickReader.toLowerCase(),
-      multiCall: this.config.multiCall.toLocaleLowerCase(),
+      chunksCount: this.config.chunksCount,
+      ticksFeesReader: this.config.ticksFeesReader,
     };
     return newConfig;
   }
@@ -571,23 +817,47 @@ export class KsElastic
     amounts: bigint[],
     zeroForOne: boolean,
     side: SwapSide,
-  ): bigint[] | null {
+    destTokenBalance: bigint,
+  ): OutputResult | null {
     try {
-      let isSell = side === SwapSide.SELL;
-      return amounts.map(amount => {
-        const amountSpecified = isSell
-          ? BigInt.asIntN(256, amount)
-          : -BigInt.asIntN(256, amount);
+      const outputsResult = ksElasticMath.queryOutputs(
+        state,
+        amounts,
+        zeroForOne,
+        side,
+      );
 
-        return ksElasticMath.getOutputAmountProMM(
-          state,
-          amountSpecified,
-          zeroForOne,
-        );
-      });
+      if (side === SwapSide.SELL) {
+        if (outputsResult.outputs[0] > destTokenBalance) {
+          return null;
+        }
+
+        for (let i = 0; i < outputsResult.outputs.length; i++) {
+          if (outputsResult.outputs[i] > destTokenBalance) {
+            outputsResult.outputs[i] = 0n;
+            outputsResult.tickCounts[i] = 0;
+          }
+        }
+      } else {
+        if (amounts[0] > destTokenBalance) {
+          return null;
+        }
+
+        // This may be improved by first checking outputs and requesting outputs
+        // only for amounts that makes more sense, but I don't think this is really
+        // important now
+        for (let i = 0; i < amounts.length; i++) {
+          if (amounts[i] > destTokenBalance) {
+            outputsResult.outputs[i] = 0n;
+            outputsResult.tickCounts[i] = 0;
+          }
+        }
+      }
+
+      return outputsResult;
     } catch (e) {
-      this.logger.error(
-        `${this.dexKey}: received error in _getSellOutputs while calculating outputs`,
+      this.logger.debug(
+        `${this.dexKey}: received error in _getOutputs while calculating outputs`,
         e,
       );
       return null;

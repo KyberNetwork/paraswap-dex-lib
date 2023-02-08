@@ -1,10 +1,8 @@
-export const KS_ELASTIC_QUOTE_GASLIMIT = 200_000;
+export const KS_ELASTIC_FUNCTION_CALL_GAS_COST = 21_000; // Ceiled
+export const KS_ELASTIC_TICK_GAS_COST = 24_000; // Ceiled
+export const KS_ELASTIC_QUOTE_GASLIMIT = 24_000; // Ceiled
 
-// This is used for price calculation. If out of scope, return 0n
-export const TICK_BITMAP_TO_USE = 4n;
-
-// This is used to check if the state is still valid.
-export const TICK_BITMAP_BUFFER = 8n;
+export const MAX_PRICING_COMPUTATION_STEPS_ALLOWED = 128;
 
 export const KS_ELASTIC_SUBGRAPH_URL =
   'https://api.thegraph.com/subgraphs/name/kybernetwork/kyberswap-elastic-mainnet';
@@ -17,22 +15,12 @@ export const ZERO_TICK_INFO = {
   tickCumulativeOutside: 0n,
   secondsPerLiquidityOutsideX128: 0n,
   secondsOutside: 0n,
+  initialized: false,
   index: 0,
-  initialized: false,
-};
-
-export const ZERO_ORACLE_OBSERVATION = {
-  blockTimestamp: 0n,
-  tickCumulative: 0n,
-  secondsPerLiquidityCumulativeX128: 0n,
-  initialized: false,
 };
 
 export const OUT_OF_RANGE_ERROR_POSTFIX = `INVALID_TICK_BIT_MAP_RANGES`;
-/**
- * The default factory enabled fee amounts, denominated in hundredths of bips.
- */
-export enum FeeAmount {
+export enum FeeTiers {
   STABLE = 8,
   LOWEST = 10,
   LOW = 40,
@@ -40,32 +28,34 @@ export enum FeeAmount {
   HIGH = 1000,
 }
 
-export function ToFeeAmount(fee: number): FeeAmount {
-  switch (fee) {
+export const FEE_UNITS = 100000n;
+export const TWO_FEE_UNITS = FEE_UNITS + FEE_UNITS;
+
+export function toFeeTiers(fee: number | bigint): FeeTiers {
+  switch (Number(fee)) {
     case 8:
-      return FeeAmount.STABLE;
+      return FeeTiers.STABLE;
     case 10:
-      return FeeAmount.LOWEST;
+      return FeeTiers.LOWEST;
     case 40:
-      return FeeAmount.LOW;
+      return FeeTiers.LOW;
     case 300:
-      return FeeAmount.MEDIUM;
+      return FeeTiers.MEDIUM;
     case 1000:
-      return FeeAmount.HIGH;
+      return FeeTiers.HIGH;
     default:
       throw Error('fee is not supported');
   }
 }
 
 const TICK_SPACING = {
-  [FeeAmount.LOWEST]: 1,
-  [FeeAmount.STABLE]: 1,
-  [FeeAmount.LOW]: 8,
-  [FeeAmount.MEDIUM]: 60,
-  [FeeAmount.HIGH]: 200,
+  [FeeTiers.LOWEST]: 1,
+  [FeeTiers.STABLE]: 1,
+  [FeeTiers.LOW]: 8,
+  [FeeTiers.MEDIUM]: 60,
+  [FeeTiers.HIGH]: 200,
 };
 
 export const TickSpacing = TICK_SPACING;
 
-export const PoolAddressNotExisted =
-  '0x0000000000000000000000000000000000000000';
+export const ZeroAddress = '0x0000000000000000000000000000000000000000';

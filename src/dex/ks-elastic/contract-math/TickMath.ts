@@ -1,6 +1,6 @@
 import { BI_MAX_UINT256 } from '../../../bigint-constants';
+import { _require } from '../../../utils';
 import { _gt } from './utils';
-import { _require } from '../utils';
 
 export class TickMath {
   static readonly MIN_TICK = -887272n;

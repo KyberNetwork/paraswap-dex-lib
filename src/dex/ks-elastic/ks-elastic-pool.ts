@@ -1,77 +1,76 @@
-import _, { filter, concat } from 'lodash';
+import _ from 'lodash';
 import { Contract } from 'web3-eth-contract';
 import { AbiItem } from 'web3-utils';
 import { Interface } from '@ethersproject/abi';
 import { DeepReadonly } from 'ts-essentials';
+import { NumberAsString } from '@paraswap/core';
+
 import { Log, Logger, BlockHeader, Address } from '../../types';
-import { StatefulEventSubscriber } from '../../stateful-event-subscriber';
+import { bigIntify, catchParseLogError } from '../../utils';
+import {
+  InitializeStateOptions,
+  StatefulEventSubscriber,
+} from '../../stateful-event-subscriber';
 import { IDexHelper } from '../../dex-helper/idex-helper';
+import { ERC20EventSubscriber } from '../../lib/generics-events-subscribers/erc20-event-subscriber';
+import { getERC20Subscriber } from '../../lib/generics-events-subscribers/erc20-event-subscriber-factory';
+import MultiCallABI from '../../abi/multi-v2.json';
+import TicksFeesReaderABI from '../../abi/ks-elastic/TicksFeesReader.json';
+import FactoryABI from '../../abi/ks-elastic/IFactory.json';
+import PoolABI from '../../abi/ks-elastic/IPool.json';
 
 import { PoolState, TickInfo } from './types';
-
-import ElasticFactoryABI from '../../abi/ks-elastic/IFactory.json';
-import TickReaderABI from '../../abi/ks-elastic/TicksFeesReader.json';
-import PoolInstanceABI from '../../abi/ks-elastic/IPool.json';
-
-import MultiCallABI from '../../abi/multi-v2.json';
-
-import { bigIntify } from '../../utils';
 import { ksElasticMath } from './contract-math/ks-elastic-math';
-import { NumberAsString } from 'paraswap-core';
-import { PoolAddressNotExisted } from './constants';
-import { PoolNotFoundError } from './errors';
 import {
   OUT_OF_RANGE_ERROR_POSTFIX,
-  FeeAmount,
   TickSpacing,
+  toFeeTiers,
+  ZeroAddress,
 } from './constants';
-
-type stateRequestCallData = {
-  funcName: string;
-  params: unknown[];
-};
-
-type multiCallInput = {
-  target: string;
-  callData: string;
-};
+import { KsElasticConfig } from './config';
+import { PoolNotFoundError } from './errors';
 
 export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
   handlers: {
-    [event: string]: (event: any, pool: PoolState, log: Log) => PoolState;
+    [event: string]: (
+      event: any,
+      pool: PoolState,
+      log: Log,
+      blockHeader: Readonly<BlockHeader>,
+    ) => PoolState;
   } = {};
 
   logDecoder: (log: Log) => any;
 
-  addressesSubscribed: string[];
-
   readonly token0: Address;
-
   readonly token1: Address;
 
   private _poolAddress?: Address;
+  private _stateRequestCallData?: {
+    funcName: string;
+    params: unknown[];
+  };
 
-  tickReader: Contract;
-  private poolContract: Contract;
-  poolFactoryContract: Contract;
-  readonly multiCallContract: Contract;
-  private isSetPoolContract: boolean | false;
+  public readonly poolInterface = new Interface(PoolABI);
+  public readonly multicallContract: Contract;
+  public readonly factoryContract: Contract;
+  public readonly ticksFeesReaderContract: Contract;
+
+  public poolContract: Contract = new this.dexHelper.web3Provider.eth.Contract(
+    PoolABI as AbiItem[],
+  );
+  public token0sub: ERC20EventSubscriber;
+  public token1sub: ERC20EventSubscriber;
 
   constructor(
     parentName: string,
-    protected network: number,
     readonly dexHelper: IDexHelper,
     logger: Logger,
-    tickReaderAddress: Address,
-    poolFactoryAddress: Address,
-    readonly fee: FeeAmount,
+    readonly fee: bigint,
     token0: Address,
     token1: Address,
-    multiCallAddress: Address,
     readonly reinvestLiquidity: bigint,
     mapKey: string = '',
-
-    readonly poolIface = new Interface(PoolInstanceABI),
   ) {
     super(
       parentName,
@@ -83,26 +82,27 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
     );
     this.token0 = token0.toLowerCase();
     this.token1 = token1.toLowerCase();
-    this.logDecoder = (log: Log) => this.poolIface.parseLog(log);
+    this.logDecoder = (log: Log) => this.poolInterface.parseLog(log);
     this.addressesSubscribed = new Array<Address>(1);
 
-    this.poolFactoryContract = new this.dexHelper.web3Provider.eth.Contract(
-      ElasticFactoryABI as AbiItem[],
-      poolFactoryAddress,
+    this.multicallContract = new this.dexHelper.web3Provider.eth.Contract(
+      MultiCallABI as AbiItem[],
+      this.dexHelper.config.data.multicallV2Address,
+    );
+    this.factoryContract = new this.dexHelper.web3Provider.eth.Contract(
+      FactoryABI as AbiItem[],
+      KsElasticConfig[parentName][this.dexHelper.config.data.network].factory,
+    );
+    this.ticksFeesReaderContract = new this.dexHelper.web3Provider.eth.Contract(
+      TicksFeesReaderABI as AbiItem[],
+      KsElasticConfig[parentName][
+        this.dexHelper.config.data.network
+      ].ticksFeesReader,
     );
 
-    this.tickReader = new this.dexHelper.web3Provider.eth.Contract(
-      TickReaderABI as AbiItem[],
-      tickReaderAddress,
-    );
-    this.multiCallContract = new this.dexHelper.web3Provider.eth.Contract(
-      MultiCallABI as AbiItem[],
-      multiCallAddress,
-    );
-    this.poolContract = new this.dexHelper.web3Provider.eth.Contract(
-      PoolInstanceABI as AbiItem[],
-    );
-    this.isSetPoolContract = false;
+    this.token0sub = getERC20Subscriber(this.dexHelper, this.token0);
+    this.token1sub = getERC20Subscriber(this.dexHelper, this.token1);
+
     // Add handlers
     this.handlers['Swap'] = this.handleSwapEvent.bind(this);
     this.handlers['Burn'] = this.handleBurnEvent.bind(this);
@@ -119,7 +119,50 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
   }
 
   set poolAddress(address: Address) {
-    this._poolAddress = address;
+    this._poolAddress = address.toLowerCase();
+  }
+
+  async initialize(
+    blockNumber: number,
+    options?: InitializeStateOptions<PoolState>,
+  ) {
+    this._poolAddress = await this.getPoolAddress();
+    this.poolContract = new this.dexHelper.web3Provider.eth.Contract(
+      PoolABI as AbiItem[],
+      this._poolAddress,
+    );
+
+    await super.initialize(blockNumber, options);
+
+    const initPromises: any[] = [];
+    if (!this.token0sub.isInitialized && !this.dexHelper.config.isSlave) {
+      initPromises.push(
+        this.token0sub.initialize(blockNumber, {
+          state: {},
+        }),
+      );
+    }
+
+    if (!this.token1sub.isInitialized && !this.dexHelper.config.isSlave) {
+      initPromises.push(
+        this.token1sub.initialize(blockNumber, {
+          state: {},
+        }),
+      );
+    }
+
+    await Promise.all(initPromises);
+
+    await Promise.all([
+      this.token0sub.subscribeToWalletBalanceChange(
+        this.poolAddress,
+        blockNumber,
+      ),
+      this.token1sub.subscribeToWalletBalanceChange(
+        this.poolAddress,
+        blockNumber,
+      ),
+    ]);
   }
 
   protected async processBlockLogs(
@@ -134,9 +177,28 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
     return newState;
   }
 
+  async getPoolAddress(): Promise<Address> {
+    try {
+      const getPoolData = {
+        funcName: 'getPool',
+        params: [this.token0, this.token1, Number(this.fee)],
+      };
+      const poolAddress = await this.factoryContract.methods[
+        getPoolData.funcName
+      ](...getPoolData.params).call();
+      if (poolAddress === ZeroAddress) {
+        throw new PoolNotFoundError(this.token0, this.token1, Number(this.fee));
+      }
+      return poolAddress;
+    } catch (error) {
+      throw error;
+    }
+  }
+
   protected processLog(
     state: DeepReadonly<PoolState>,
     log: Readonly<Log>,
+    blockHeader: Readonly<BlockHeader>,
   ): DeepReadonly<PoolState> | null {
     try {
       const event = this.logDecoder(log);
@@ -144,49 +206,41 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
         // Because we have observations in array which is mutable by nature, there is a
         // ts compile error: https://stackoverflow.com/questions/53412934/disable-allowing-assigning-readonly-types-to-non-readonly-types
         // And there is no good workaround, so turn off the type checker for this line
-        const stateCopy = _.cloneDeep(state);
-
-        return this.handlers[event.name](event, stateCopy, log);
+        const _state = _.cloneDeep(state) as PoolState;
+        try {
+          return this.handlers[event.name](event, _state, log, blockHeader);
+        } catch (e) {
+          if (
+            e instanceof Error &&
+            e.message.endsWith(OUT_OF_RANGE_ERROR_POSTFIX)
+          ) {
+            this.logger.warn(
+              `${this.parentName}: Pool ${this.poolAddress} on ${
+                this.dexHelper.config.data.network
+              } is out of TickBitmap requested range. Re-query the state. ${JSON.stringify(
+                event,
+              )}`,
+              e,
+            );
+          } else {
+            this.logger.error(
+              `${this.parentName}: Pool ${this.poolAddress}, ` +
+                `network=${this.dexHelper.config.data.network}: Unexpected ` +
+                `error while handling event on blockNumber=${blockHeader.number}, ` +
+                `blockHash=${blockHeader.hash} and parentHash=${
+                  blockHeader.parentHash
+                } for KsElastic, ${JSON.stringify(event)}`,
+              e,
+            );
+          }
+          _state.isValid = false;
+          return _state;
+        }
       }
-      return state;
     } catch (e) {
-      this.logger.error(
-        `Error_${this.parentName}_processLog could not parse the log with topic ${log.topics}:`,
-        e,
-      );
-      return null;
+      catchParseLogError(e, this.logger);
     }
-  }
-
-  getPoolStateRequest() {
-    const data = {
-      funcName: 'getPoolState',
-      params: [],
-    };
-    return data;
-  }
-
-  getPoolCallData(): stateRequestCallData {
-    const data = {
-      funcName: 'getPool',
-      params: [this.token0, this.token1, Number(this.fee)],
-    };
-    return data;
-  }
-
-  generateMultiCallInput(ticks: Number[]): multiCallInput[] {
-    return ticks.map(tickIndex => ({
-      target: this.poolAddress,
-      callData: this.poolIface.encodeFunctionData('ticks', [tickIndex]),
-    }));
-  }
-
-  decodeMultiCallResult(multiCallTickResult: []) {
-    const result = new Array(multiCallTickResult.length);
-    multiCallTickResult.forEach((element, index) => {
-      result[index] = this.poolIface.decodeFunctionResult('ticks', element);
-    });
-    return result;
+    return null; // ignore unrecognized event
   }
 
   private setTicksMapping(
@@ -215,18 +269,6 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
     );
   }
 
-  getTickInRangeRequest(
-    poolAddress: string,
-    startTick: Number,
-    length: Number,
-  ): stateRequestCallData {
-    const data = {
-      funcName: 'getTicksInRange',
-      params: [poolAddress, startTick, length],
-    };
-    return data;
-  }
-
   async getAllTicks(poolAddress: string, blockNumber: number) {
     let startTick = -887272;
     let length = 1000;
@@ -242,35 +284,9 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
       if (ticks.length < length || ticks[length - 1] == 0) {
         shouldFinish = true;
       }
-      allTicks = concat(allTicks, ticks);
+      allTicks = _.concat(allTicks, ticks);
     }
-    return filter(allTicks, tick => tick != 0);
-  }
-
-  async gePoolContract() {
-    try {
-      const getPoolData = this.getPoolCallData();
-      const poolAddress = await this.poolFactoryContract.methods[
-        getPoolData.funcName
-      ](...getPoolData.params).call();
-      if (poolAddress === PoolAddressNotExisted) {
-        throw new PoolNotFoundError(this.token0, this.token1, this.fee);
-      }
-      this.poolAddress = poolAddress;
-      return new this.dexHelper.web3Provider.eth.Contract(
-        PoolInstanceABI as AbiItem[],
-        poolAddress,
-      );
-    } catch (error) {
-      throw error;
-    }
-  }
-
-  getPoolState(blockNumber: number) {
-    const callRequest = this.getPoolStateRequest();
-    return this.poolContract.methods[callRequest.funcName](
-      ...callRequest.params,
-    ).call({}, blockNumber || 'latest');
+    return _.filter(allTicks, tick => tick != 0);
   }
 
   async getTickInRange(
@@ -279,12 +295,21 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
     length: number,
     blockNumber: number,
   ) {
-    const callRequest = this.getTickInRangeRequest(
-      poolAddress,
-      startTick,
-      length,
-    );
-    return this.tickReader.methods[callRequest.funcName](
+    const callRequest = {
+      funcName: 'getTicksInRange',
+      params: [poolAddress, startTick, length],
+    };
+    return this.ticksFeesReaderContract.methods[callRequest.funcName](
+      ...callRequest.params,
+    ).call({}, blockNumber || 'latest');
+  }
+
+  getPoolState(blockNumber: number) {
+    const callRequest = {
+      funcName: 'getPoolState',
+      params: [],
+    };
+    return this.poolContract.methods[callRequest.funcName](
       ...callRequest.params,
     ).call({}, blockNumber || 'latest');
   }
@@ -296,37 +321,36 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
     );
   }
 
+  buildParamsForTicksCall(ticks: Number[]): {
+    target: string;
+    callData: string;
+  }[] {
+    return ticks.map(tickIndex => ({
+      target: this.poolAddress,
+      callData: this.poolInterface.encodeFunctionData('ticks', [tickIndex]),
+    }));
+  }
+
+  decodeTicksCallResults(multiCallTickResult: []) {
+    const result = new Array(multiCallTickResult.length);
+    multiCallTickResult.forEach((element, index) => {
+      result[index] = this.poolInterface.decodeFunctionResult('ticks', element);
+    });
+    return result;
+  }
+
   async getTickInfoFromContract(ticks: number[]) {
     const multiCallResult = (
-      await this.multiCallContract.methods
-        .aggregate(this.generateMultiCallInput(ticks))
+      await this.multicallContract.methods
+        .aggregate(this.buildParamsForTicksCall(ticks))
         .call()
     ).returnData;
-    return this.decodeMultiCallResult(multiCallResult);
+    return this.decodeTicksCallResults(multiCallResult);
   }
 
-  async getAllTickInfoFromContract(ticks: number[]): Promise<TickInfo[]> {
-    if (ticks.length < 500) {
-      return this.getTickInfoFromContract(ticks);
-    }
-    const slicedTicks = _.chunk(ticks, 500);
-    return (
-      await Promise.all(
-        slicedTicks.map(async tickChunk =>
-          this.getTickInfoFromContract(tickChunk),
-        ),
-      )
-    ).flat();
-  }
-
-  async generateState(blockNumber: number): Promise<Readonly<PoolState>> {
-    // TODO: Should be handle it first before processing other logics
-    // Cache pool contract for next process
-    if (!this.isSetPoolContract) {
-      this.poolContract = await this.gePoolContract();
-      this.isSetPoolContract = true;
-    }
-
+  public async generateState(
+    blockNumber: number,
+  ): Promise<Readonly<PoolState>> {
     const batchRequestData = [
       this.getAllTicks(this.poolAddress, blockNumber),
       this.getPoolState(blockNumber),
@@ -336,7 +360,7 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
       batchRequestData,
     );
     const ticks = {};
-    const newTicks = filter(_ticks, tick => tick != 0);
+    const newTicks = _.filter(_ticks, tick => tick != 0);
     const tickInfosFromContract = await this.getTickInfoFromContract(newTicks);
     this.setTicksMapping(ticks, newTicks, tickInfosFromContract);
 
@@ -345,105 +369,102 @@ export class KsElasticEventPool extends StatefulEventSubscriber<PoolState> {
     this.addressesSubscribed[0] = this.poolAddress;
 
     const currentTick = _poolState.currentTick;
-    const tickSpacing = bigIntify(TickSpacing[this.fee]);
+    const tickSpacing = bigIntify(TickSpacing[toFeeTiers(this.fee)]);
     let isValid = false;
     if (_poolState.locked == false || _poolState.locked == undefined) {
       isValid = true;
     }
+
     return <PoolState>{
       pool: this.poolAddress,
-      tickSpacing,
+      tickSpacing: tickSpacing,
       fee: this.fee,
       sqrtPriceX96: bigIntify(_poolState.sqrtP),
       liquidity: bigIntify(_liquidityState.baseL),
-      ticks,
-      isValid,
+      ticks: ticks,
+      isValid: isValid,
       currentTick: bigIntify(currentTick),
       reinvestLiquidity: bigIntify(_liquidityState.reinvestL),
     };
   }
 
-  handleSwapEvent(event: any, pool: PoolState, log: Log) {
+  handleSwapEvent(
+    event: any,
+    pool: PoolState,
+    log: Log,
+    blockHeader: BlockHeader,
+  ) {
     const newSqrtPriceX96 = bigIntify(event.args.sqrtPriceX96);
     const amount0 = bigIntify(event.args.amount0);
+    const amount1 = bigIntify(event.args.amount1);
     const newTick = bigIntify(event.args.tick);
     const newLiquidity = bigIntify(event.args.liquidity);
 
-    if (amount0 === 0n) {
+    if (amount0 <= 0n && amount1 <= 0n) {
       this.logger.error(
-        `${this.parentName}: amount0 === 0n for ${this.poolAddress} . Check why it happened`,
+        `${this.parentName}: amount0 <= 0n && amount1 <= 0n for ` +
+          `${this.poolAddress} and ${blockHeader.number}. Check why it happened`,
       );
       pool.isValid = false;
       return pool;
     } else {
       const zeroForOne = amount0 > 0n;
 
-      return this._callAndHandleError(
-        // I had strange TS compiler issue, so have to write it this way
-        () =>
-          ksElasticMath.swapFromEvent(
-            pool,
-            amount0,
-            newSqrtPriceX96,
-            newTick,
-            newLiquidity,
-            zeroForOne,
-          ),
+      ksElasticMath.swapFromEvent(
         pool,
+        newSqrtPriceX96,
+        newTick,
+        newLiquidity,
+        zeroForOne,
       );
+
+      return pool;
     }
   }
 
-  handleBurnEvent(event: any, pool: PoolState, log: Log) {
+  handleBurnEvent(
+    event: any,
+    pool: PoolState,
+    log: Log,
+    blockHeader: BlockHeader,
+  ) {
     const amount = bigIntify(event.args.amount);
     const tickLower = bigIntify(event.args.tickLower);
     const tickUpper = bigIntify(event.args.tickUpper);
 
-    return this._callAndHandleError(
-      ksElasticMath._modifyPosition.bind(ksElasticMath, pool, {
-        tickLower,
-        tickUpper,
-        liquidityDelta: -BigInt.asIntN(128, BigInt.asIntN(256, amount)),
-      }),
-      pool,
-    );
-  }
+    ksElasticMath._modifyPosition(pool, {
+      tickLower,
+      tickUpper,
+      liquidityDelta: -BigInt.asIntN(128, BigInt.asIntN(256, amount)),
+    });
 
-  handleMintEvent(event: any, pool: PoolState, log: Log) {
-    const amount = bigIntify(event.args.amount);
-    const tickLower = bigIntify(event.args.tickLower);
-    const tickUpper = bigIntify(event.args.tickUpper);
-
-    return this._callAndHandleError(
-      ksElasticMath._modifyPosition.bind(ksElasticMath, pool, {
-        tickLower,
-        tickUpper,
-        liquidityDelta: amount,
-      }),
-      pool,
-    );
-  }
-
-  private _callAndHandleError(func: Function, pool: PoolState) {
-    try {
-      func();
-    } catch (e) {
-      if (
-        e instanceof Error &&
-        e.message.endsWith(OUT_OF_RANGE_ERROR_POSTFIX)
-      ) {
-        this.logger.trace(
-          `${this.parentName}: Pool ${this.poolAddress} on network ${this.network} is out of TickBitmap requested range. Re-query the state`,
-          e,
-        );
-      } else {
-        this.logger.error(
-          'Unexpected error while handling event for KyberSwap Elastic',
-          e,
-        );
-      }
-      pool.isValid = false;
-    }
     return pool;
+  }
+
+  handleMintEvent(
+    event: any,
+    pool: PoolState,
+    log: Log,
+    blockHeader: BlockHeader,
+  ) {
+    const amount = bigIntify(event.args.amount);
+    const tickLower = bigIntify(event.args.tickLower);
+    const tickUpper = bigIntify(event.args.tickUpper);
+
+    ksElasticMath._modifyPosition(pool, {
+      tickLower,
+      tickUpper,
+      liquidityDelta: amount,
+    });
+
+    return pool;
+  }
+
+  public getBalanceToken0(blockNumber: number) {
+    return this.token0sub.getBalance(this.poolAddress, blockNumber);
+  }
+
+  public getBalanceToken1(blockNumber: number) {
+    return this.token1sub.getBalance(this.poolAddress, blockNumber);
   }
 }

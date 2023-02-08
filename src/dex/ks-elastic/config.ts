@@ -1,12 +1,11 @@
-import { DexParams } from './types';
 import { DexConfigMap, AdapterMappings } from '../../types';
 import { Network, SwapSide } from '../../constants';
-import { FeeAmount } from './constants';
-
 import { Address } from '../../types';
+import { DexParams } from './types';
+import { FeeTiers } from './constants';
 
-// const SUPPORTED_FEES = [FeeAmount.HIGH, FeeAmount.MEDIUM, FeeAmount.LOW, FeeAmount.STABLE, FeeAmount.LOWEST];
-const SUPPORTED_FEES = [FeeAmount.MEDIUM];
+// const SUPPORTED_FEES = [FeeTiers.HIGH, FeeTiers.MEDIUM, FeeTiers.LOW, FeeTiers.STABLE, FeeTiers.LOWEST];
+const SUPPORTED_FEES = [FeeTiers.MEDIUM];
 
 // Pools tha will be initialized on app startup
 // They are added for testing
@@ -39,15 +38,33 @@ export const KsElasticConfig: DexConfigMap<DexParams> = {
       factory: '0x5F1dddbf348aC2fbe22a163e30F99F9ECE3DD50a',
       router: '0xC1e7dFE73E1598E3910EF4C7845B68A9Ab6F4c83',
       supportedFees: SUPPORTED_FEES,
-      tickReader: '0x165c68077ac06c83800d19200e6E2B08D02dE75D',
-      multiCall: '0x5BA1e12693Dc8F9c48aAD8770482f4739bEeD696',
+      ticksFeesReader: '0x165c68077ac06c83800d19200e6E2B08D02dE75D',
+      quoter: '0x0D125c15D54cA1F8a813C74A81aEe34ebB508C1f',
+      chunksCount: 10,
     },
     [Network.POLYGON]: {
       factory: '0x5F1dddbf348aC2fbe22a163e30F99F9ECE3DD50a',
       router: '0xC1e7dFE73E1598E3910EF4C7845B68A9Ab6F4c83',
       supportedFees: SUPPORTED_FEES,
-      tickReader: '0x165c68077ac06c83800d19200e6E2B08D02dE75D',
-      multiCall: '0xed386Fe855C1EFf2f843B910923Dd8846E45C5A4',
+      ticksFeesReader: '0x165c68077ac06c83800d19200e6E2B08D02dE75D',
+      quoter: '0x0D125c15D54cA1F8a813C74A81aEe34ebB508C1f',
+      chunksCount: 10,
+    },
+    [Network.ARBITRUM]: {
+      factory: '0x5F1dddbf348aC2fbe22a163e30F99F9ECE3DD50a',
+      router: '0xC1e7dFE73E1598E3910EF4C7845B68A9Ab6F4c83',
+      supportedFees: SUPPORTED_FEES,
+      ticksFeesReader: '0x165c68077ac06c83800d19200e6E2B08D02dE75D',
+      quoter: '0x0D125c15D54cA1F8a813C74A81aEe34ebB508C1f',
+      chunksCount: 10,
+    },
+    [Network.OPTIMISM]: {
+      factory: '0x5F1dddbf348aC2fbe22a163e30F99F9ECE3DD50a',
+      router: '0xC1e7dFE73E1598E3910EF4C7845B68A9Ab6F4c83',
+      supportedFees: SUPPORTED_FEES,
+      ticksFeesReader: '0x165c68077ac06c83800d19200e6E2B08D02dE75D',
+      quoter: '0x0D125c15D54cA1F8a813C74A81aEe34ebB508C1f',
+      chunksCount: 10,
     },
   },
 };
@@ -60,5 +77,13 @@ export const Adapters: Record<number, AdapterMappings> = {
   [Network.POLYGON]: {
     [SwapSide.SELL]: [{ name: 'PolygonAdapter01', index: 13 }],
     [SwapSide.BUY]: [{ name: 'PolygonBuyAdapter', index: 2 }],
+  },
+  [Network.ARBITRUM]: {
+    [SwapSide.SELL]: [{ name: 'ArbitrumAdapter01', index: 3 }],
+    [SwapSide.BUY]: [{ name: 'ArbitrumBuyAdapter', index: 2 }],
+  },
+  [Network.OPTIMISM]: {
+    [SwapSide.SELL]: [{ name: 'OptimismAdapter01', index: 3 }],
+    [SwapSide.BUY]: [{ name: 'OptimismBuyAdapter', index: 2 }],
   },
 };

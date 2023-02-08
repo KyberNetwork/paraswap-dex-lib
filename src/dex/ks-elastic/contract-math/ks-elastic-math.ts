@@ -1,17 +1,18 @@
 import _ from 'lodash';
-import { PoolState, TickInfo } from '../types';
-import { LiquidityMath } from './LiquidityMath';
+import { NumberAsString, SwapSide } from 'paraswap-core';
+import { DeepReadonly } from 'ts-essentials';
+
+import { BI_MAX_INT } from '../../../bigint-constants';
+import { _require } from '../../../utils';
+import { PoolState, TickInfo, OutputResult } from '../types';
 import { ONE, ZERO } from '../internal-constants';
+import { OUT_OF_RANGE_ERROR_POSTFIX } from '../constants';
+
+import { LiquidityMath } from './LiquidityMath';
 import { SqrtPriceMath } from './SqrtPriceMath';
 import { SwapMath } from './SwapMath';
 import { TickList } from './TickList';
-
 import { TickMath } from './TickMath';
-import { _require } from '../../../utils';
-import { DeepReadonly } from 'ts-essentials';
-import { NumberAsString, SwapSide } from 'paraswap-core';
-import { OUT_OF_RANGE_ERROR_POSTFIX } from '../constants';
-import { setImmediatePromise } from '../utils';
 
 type ModifyPositionParams = {
   tickLower: bigint;
@@ -19,58 +20,46 @@ type ModifyPositionParams = {
   liquidityDelta: bigint;
 };
 
-type PriceComputationState = {
-  amountSpecifiedRemaining: bigint;
-  amountCalculated: bigint;
-  sqrtPriceX96: bigint;
-  tick: bigint;
-  protocolFee: bigint;
-  liquidity: bigint;
-  isFirstCycleState: boolean;
-};
-
-type PriceComputationCache = {
-  liquidityStart: bigint;
-  // blockTimestamp: bigint;
-  feeProtocol: bigint;
-  secondsPerLiquidityCumulativeX128: bigint;
-  tickCumulative: bigint;
-  computedLatestObservation: boolean;
-};
-
 class KsElasticMath {
-  getOutputAmountProMM(
+  queryOutputs(
     poolState: DeepReadonly<PoolState>,
-    inputAmount: bigint,
+    inputAmounts: bigint[],
     zeroForOne: boolean,
-    sqrtPriceLimitX96?: bigint | 0n,
-  ): bigint {
-    return this.swapProMM(
-      poolState,
-      zeroForOne,
-      inputAmount,
-      sqrtPriceLimitX96,
-    );
-    // return -amountOut;
+    side: SwapSide,
+  ): OutputResult {
+    let outputResult: OutputResult = {
+      outputs: [],
+      tickCounts: [],
+    };
+    const isSell = side === SwapSide.SELL;
+
+    inputAmounts.map(inputAmount => {
+      let swapResults = this.swap(
+        poolState,
+        zeroForOne,
+        (inputAmount = isSell
+          ? BigInt.asIntN(256, inputAmount)
+          : -BigInt.asIntN(256, inputAmount)),
+      );
+      outputResult.outputs.push(swapResults.output);
+      outputResult.tickCounts.push(swapResults.tickCount);
+    });
+
+    return outputResult;
   }
 
-  private swapProMM(
+  private swap(
     poolState: PoolState,
     zeroForOne: boolean,
     amountSpecified: bigint,
-    sqrtPriceLimitX96?: bigint | 0n,
-  ): bigint {
+  ): {
+    output: bigint;
+    tickCount: number;
+  } {
     const tickList = initTickList(poolState.ticks);
-    //zeroForOne . as long as swaping token 0->1, X96 of token 0 come to 0, then MIN_SQRT_RATIO is the limit
-    //!zeroForOne . as long as swaping token 0->1, X96 of token 0 come to infinity, then MAX_SQRT_RATIO is the limit
-    if (
-      !sqrtPriceLimitX96 ||
-      sqrtPriceLimitX96 == 0n ||
-      sqrtPriceLimitX96 == undefined
-    )
-      sqrtPriceLimitX96 = zeroForOne
-        ? TickMath.MIN_SQRT_RATIO + ONE
-        : TickMath.MAX_SQRT_RATIO - ONE;
+    const sqrtPriceLimitX96 = zeroForOne
+      ? TickMath.MIN_SQRT_RATIO + 1n
+      : TickMath.MAX_SQRT_RATIO - 1n;
 
     _require(
       zeroForOne
@@ -93,6 +82,8 @@ class KsElasticMath {
       sqrtPriceX96: poolState.sqrtPriceX96,
       tick: poolState.currentTick,
     };
+    let tickCount = 0;
+
     while (
       state.amountSpecifiedRemaining != ZERO &&
       state.sqrtPriceX96 != sqrtPriceLimitX96
@@ -108,17 +99,18 @@ class KsElasticMath {
         deltaL: 0n,
       };
       step.sqrtPriceStartX96 = state.sqrtPriceX96;
-      let ticketNext;
-      let initialized;
+
+      let nextTick: number;
+      let initialized: boolean;
       try {
-        [ticketNext, initialized] =
+        [nextTick, initialized] =
           TickList.nextInitializedTickWithinFixedDistance(
             tickList,
             Number(state.tick),
             zeroForOne,
             480,
           );
-        step.tickNext = BigInt(ticketNext);
+        step.tickNext = BigInt(nextTick);
         step.initialized = initialized;
       } catch (e) {
         if (
@@ -139,22 +131,24 @@ class KsElasticMath {
       }
 
       step.sqrtPriceNextX96 = TickMath.getSqrtRatioAtTick(step.tickNext);
-      [state.sqrtPriceX96, step.amountIn, step.amountOut, step.deltaL] =
-        SwapMath.computeSwapStepPromm(
-          state.sqrtPriceX96,
-          (
-            zeroForOne
-              ? step.sqrtPriceNextX96 < sqrtPriceLimitX96
-              : step.sqrtPriceNextX96 > sqrtPriceLimitX96
-          )
-            ? sqrtPriceLimitX96
-            : step.sqrtPriceNextX96,
-          state.baseL + state.reinvestL,
-          state.amountSpecifiedRemaining,
-          poolState.fee,
-          exactInput,
-          zeroForOne,
-        );
+      let stateAfterSwapping = SwapMath.computeSwapStep(
+        state.sqrtPriceX96,
+        (
+          zeroForOne
+            ? step.sqrtPriceNextX96 < sqrtPriceLimitX96
+            : step.sqrtPriceNextX96 > sqrtPriceLimitX96
+        )
+          ? sqrtPriceLimitX96
+          : step.sqrtPriceNextX96,
+        state.baseL + state.reinvestL,
+        state.amountSpecifiedRemaining,
+        BigInt(poolState.fee),
+      );
+
+      state.sqrtPriceX96 = stateAfterSwapping.sqrtRatioNextX96;
+      step.amountIn = stateAfterSwapping.amountIn;
+      step.amountOut = stateAfterSwapping.amountOut;
+      step.deltaL = stateAfterSwapping.deltaL;
 
       state.reinvestL += step.deltaL;
       if (exactInput) {
@@ -178,13 +172,13 @@ class KsElasticMath {
       } else {
         state.tick = TickMath.getTickAtSqrtRatio(state.sqrtPriceX96);
       }
+      tickCount++;
     }
-    return state.amountCalculated;
+    return { output: state.amountCalculated, tickCount: tickCount };
   }
 
   swapFromEvent(
     poolState: PoolState,
-    amountSpecified: bigint,
     newSqrtPriceX96: bigint,
     newTick: bigint,
     newLiquidity: bigint,
@@ -202,7 +196,7 @@ class KsElasticMath {
     const state = {
       // Because I don't have the exact amount user used, set this number to MAX_NUMBER to proceed
       // with calculations. I think it is not a problem since in loop I don't rely on this value
-      amountSpecifiedRemaining: amountSpecified,
+      amountSpecifiedRemaining: BI_MAX_INT,
       amountCalculated: 0n,
       sqrtPriceX96: poolState.sqrtPriceX96,
       tick: poolState.currentTick,
@@ -212,7 +206,6 @@ class KsElasticMath {
       fee: poolState.fee,
       tickList: tickList,
     };
-    const exactInput = amountSpecified >= ZERO;
 
     // Because I didn't have all variables, adapted loop stop with state.tick !== newTick
     // condition. This cycle need only to calculate Tick.cross() function values
@@ -251,27 +244,29 @@ class KsElasticMath {
       }
 
       step.sqrtPriceNextX96 = TickMath.getSqrtRatioAtTick(step.tickNext);
+      let stateAfterSwapping = SwapMath.computeSwapStep(
+        state.sqrtPriceX96,
+        (
+          zeroForOne
+            ? step.sqrtPriceNextX96 < newSqrtPriceX96
+            : step.sqrtPriceNextX96 > newSqrtPriceX96
+        )
+          ? newSqrtPriceX96
+          : step.sqrtPriceNextX96,
+        state.liquidity + state.reinvestL,
+        state.amountSpecifiedRemaining,
+        poolState.fee,
+      );
 
-      [state.sqrtPriceX96, step.amountIn, step.amountOut, step.deltaL] =
-        SwapMath.computeSwapStepPromm(
-          state.sqrtPriceX96,
-          (
-            zeroForOne
-              ? step.sqrtPriceNextX96 < newSqrtPriceX96
-              : step.sqrtPriceNextX96 > newSqrtPriceX96
-          )
-            ? newSqrtPriceX96
-            : step.sqrtPriceNextX96,
-          state.liquidity + state.reinvestL,
-          state.amountSpecifiedRemaining,
-          poolState.fee,
-          exactInput,
-          zeroForOne,
-        );
+      state.sqrtPriceX96 = stateAfterSwapping.sqrtRatioNextX96;
+      step.amountIn = stateAfterSwapping.amountIn;
+      step.amountOut = stateAfterSwapping.amountOut;
+      step.deltaL = stateAfterSwapping.deltaL;
       state.amountSpecifiedRemaining =
         state.amountSpecifiedRemaining - step.amountIn;
       state.amountCalculated = state.amountCalculated + step.amountOut;
       state.reinvestL = state.reinvestL + step.deltaL;
+
       if (state.sqrtPriceX96 == step.sqrtPriceNextX96) {
         if (step.initialized) {
           let liquidityNet = TickList.getTick(
