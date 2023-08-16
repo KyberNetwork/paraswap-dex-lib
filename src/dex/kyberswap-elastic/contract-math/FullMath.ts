@@ -16,16 +16,7 @@ export class FullMath {
   }
 
   static mulDivFloor(a: bigint, b: bigint, denominator: bigint) {
-    const result = (a * b) / denominator;
-
-    _require(
-      result <= BI_MAX_UINT256,
-      '',
-      { result, BI_MAX_UINT: BI_MAX_UINT256 },
-      'result <= BI_MAX_UINT',
-    );
-
-    return result;
+    return this.mulDiv(a, b, denominator);
   }
 
   static mulDivRoundingUp(a: bigint, b: bigint, denominator: bigint) {
@@ -42,15 +33,6 @@ export class FullMath {
   }
 
   static mulDivCeiling(a: bigint, b: bigint, denominator: bigint) {
-    const result = (a * b + denominator - 1n) / denominator;
-
-    _require(
-      result <= BI_MAX_UINT256,
-      '',
-      { result, BI_MAX_UINT: BI_MAX_UINT256 },
-      'result <= BI_MAX_UINT',
-    );
-
-    return result;
+    return this.mulDivRoundingUp(a, b, denominator);
   }
 }

@@ -17,6 +17,8 @@ import { ReinvestmentMath } from './ReinvestmentMath';
 import { LiqDeltaMath } from './LiqDeltaMath';
 import { SqrtPriceMath } from './SqrtPriceMath';
 import { LiquidityMath } from './LiquidityMath';
+import { SafeCast } from './SafeCast';
+import { BigNumber } from 'ethers';
 
 type SwapDataState = {
   specifiedAmount: bigint;
@@ -55,6 +57,16 @@ function _updateStateObject<T extends SwapDataState>(toUpdate: T, updateBy: T) {
     toUpdate[k] = updateBy[k];
   }
 }
+
+function _convertToBigInt(obj: any) {
+  for (const k of Object.keys(obj)) {
+    if (BigNumber.isBigNumber(obj[k]) || typeof obj[k] == 'number') {
+      obj[k] = bigIntify(obj[k]);
+    }
+  }
+  return obj;
+}
+
 function _simulateSwap(
   poolState: DeepReadonly<PoolState>,
   ticksStartState: Record<NumberAsString, TickInfo>,
@@ -154,7 +166,7 @@ function _simulateSwap(
       if (swapData.baseL > 0n) {
         swapData.secondsPerLiquidityGlobal += BigInt.asUintN(
           128,
-          secondsElapsed << (96n / swapData.baseL),
+          (secondsElapsed << 96n) / swapData.baseL,
         );
       }
     }
@@ -258,7 +270,7 @@ function _updateLiquidityAndCrossTick(
     currentLiquidity,
     liquidityNet >= 0
       ? BigInt.asUintN(128, liquidityNet)
-      : BigInt.asUintN(128, liquidityNet * -1n),
+      : SafeCast.revToUint128(liquidityNet),
     liquidityNet >= 0,
   );
 
@@ -549,9 +561,18 @@ class KSElasticMath {
   ): SwapDataState {
     let isExactInput = amountSpecified > 0n;
     let willTickUp = isExactInput != isToken0;
+
+    for (const k of Object.keys(state.initializedTicks)) {
+      state.initializedTicks[k] = _convertToBigInt(state.initializedTicks[k]);
+    }
+
+    for (const k of Object.keys(state.ticks)) {
+      state.ticks[k] = _convertToBigInt(state.ticks[k]);
+    }
+
     const initState: SwapDataState = {
-      ...poolData,
-      ...state,
+      ..._convertToBigInt(poolData),
+      ..._convertToBigInt(state),
       currentTick: bigIntify(poolData.currentTick),
       nearestCurrentTick: bigIntify(poolData.nearestCurrentTick),
       nextTick: !willTickUp
@@ -561,7 +582,7 @@ class KSElasticMath {
           ),
       specifiedAmount: 0n,
       returnedAmount: 0n,
-      startSqrtP: poolData.sqrtP,
+      startSqrtP: bigIntify(poolData.sqrtP),
       isToken0: isToken0,
       isExactInput: isExactInput,
       nextSqrtP: 0n,
@@ -569,7 +590,7 @@ class KSElasticMath {
       tickCount: 0n,
       feeGrowthGlobal: 0n,
       governmentFee: 0n,
-      governmentFeeUnits: state.swapFeeUnits,
+      governmentFeeUnits: bigIntify(state.swapFeeUnits),
       lpFee: 0n,
     };
     return initState;

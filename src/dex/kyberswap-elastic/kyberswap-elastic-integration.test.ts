@@ -57,8 +57,8 @@ function getReaderCalldata(
             limitSqrtP: 0n,
           }
         : {
-            tokenIn: tokenIn,
-            tokenOut: tokenOut,
+            tokenIn: tokenOut,
+            tokenOut: tokenIn,
             amount: amount,
             feeUnits: swapFeeUnits,
             limitSqrtP: 0n,
@@ -361,7 +361,7 @@ describe('KyberswapElastic', function () {
   });
 
   it('getPoolIdentifiers and getPricesVolume BUY stable pairs', async function () {
-    const TokenASymbol = 'DAI';
+    const TokenASymbol = 'USDT';
     const TokenA = Tokens[network][TokenASymbol];
 
     const TokenBSymbol = 'USDC';

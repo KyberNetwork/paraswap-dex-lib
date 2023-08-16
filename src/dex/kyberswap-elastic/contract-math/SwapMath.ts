@@ -1,7 +1,7 @@
 import { FEE_UNITS, TWO_FEE_UNITS, TWO_POW_96 } from '../constants';
 import { FullMath } from './FullMath';
 import { QuadMath } from './QuadMath';
-
+import { SafeCast } from './SafeCast';
 export class SwapMath {
   static computeSwapStep(
     liquidity: bigint,
@@ -24,9 +24,9 @@ export class SwapMath {
 
     if (currentSqrtP === targetSqrtP)
       return {
-        usedAmount: usedAmount,
-        returnedAmount: returnedAmount,
-        deltaL: deltaL,
+        usedAmount,
+        returnedAmount,
+        deltaL,
         nextSqrtP: currentSqrtP,
       };
 
@@ -49,7 +49,7 @@ export class SwapMath {
     }
 
     let absDelta =
-      usedAmount >= 0 ? usedAmount : BigInt.asUintN(256, -1n * usedAmount);
+      usedAmount >= 0 ? usedAmount : SafeCast.revToUint256(usedAmount);
     if (nextSqrtP == 0n) {
       deltaL = this.estimateIncrementalLiquidity(
         absDelta,
@@ -59,8 +59,7 @@ export class SwapMath {
         isExactInput,
         isToken0,
       );
-      nextSqrtP = BigInt.asUintN(
-        160,
+      nextSqrtP = SafeCast.toUint160(
         this.calcFinalPrice(
           absDelta,
           liquidity,
@@ -90,8 +89,8 @@ export class SwapMath {
     );
 
     return {
-      usedAmount: BigInt.asIntN(256, usedAmount),
-      returnedAmount: BigInt.asIntN(256, returnedAmount),
+      usedAmount,
+      returnedAmount,
       deltaL,
       nextSqrtP: BigInt.asUintN(160, nextSqrtP),
     };
@@ -121,8 +120,7 @@ export class SwapMath {
           TWO_FEE_UNITS * absPriceDiff,
           denominator,
         );
-        reachAmount = BigInt.asIntN(
-          256,
+        reachAmount = SafeCast.toInt256(
           FullMath.mulDivFloor(numerator, TWO_POW_96, currentSqrtP),
         );
       } else {
@@ -133,8 +131,7 @@ export class SwapMath {
           TWO_FEE_UNITS * absPriceDiff,
           denominator,
         );
-        reachAmount = BigInt.asIntN(
-          256,
+        reachAmount = SafeCast.toInt256(
           FullMath.mulDivFloor(numerator, currentSqrtP, TWO_POW_96),
         );
       }
@@ -151,9 +148,8 @@ export class SwapMath {
           numerator,
           denominator,
         );
-        reachAmount = BigInt.asIntN(
-          256,
-          (-1n * FullMath.mulDivFloor(numerator, absPriceDiff, currentSqrtP)) /
+        reachAmount = SafeCast.revToInt256(
+          FullMath.mulDivFloor(numerator, absPriceDiff, currentSqrtP) /
             targetSqrtP,
         );
       } else {
@@ -164,9 +160,8 @@ export class SwapMath {
           TWO_FEE_UNITS * targetSqrtP - feeInFeeUnits * currentSqrtP;
         let numerator = denominator - feeInFeeUnits * targetSqrtP;
         numerator = FullMath.mulDivFloor(liquidity, numerator, denominator);
-        reachAmount = BigInt.asIntN(
-          256,
-          -1n * FullMath.mulDivFloor(numerator, absPriceDiff, TWO_POW_96),
+        reachAmount = SafeCast.revToInt256(
+          FullMath.mulDivFloor(numerator, absPriceDiff, TWO_POW_96),
         );
       }
     }
@@ -314,13 +309,11 @@ export class SwapMath {
     if (isToken0) {
       if (isExactInput) {
         returnedAmount =
-          BigInt.asIntN(
-            256,
+          SafeCast.toInt256(
             FullMath.mulDivCeiling(deltaL, nextSqrtP, TWO_POW_96),
           ) +
-          BigInt.asIntN(
-            256,
-            -FullMath.mulDivFloor(
+          SafeCast.revToInt256(
+            FullMath.mulDivFloor(
               liquidity,
               currentSqrtP - nextSqrtP,
               TWO_POW_96,
@@ -328,12 +321,10 @@ export class SwapMath {
           );
       } else {
         returnedAmount =
-          BigInt.asIntN(
-            256,
+          SafeCast.toInt256(
             FullMath.mulDivCeiling(deltaL, nextSqrtP, TWO_POW_96),
           ) +
-          BigInt.asIntN(
-            256,
+          SafeCast.toInt256(
             FullMath.mulDivCeiling(
               liquidity,
               nextSqrtP - currentSqrtP,
@@ -343,13 +334,11 @@ export class SwapMath {
       }
     } else {
       returnedAmount =
-        BigInt.asIntN(
-          256,
+        SafeCast.toInt256(
           FullMath.mulDivCeiling(liquidity + deltaL, TWO_POW_96, nextSqrtP),
         ) +
-        BigInt.asIntN(
-          256,
-          -FullMath.mulDivFloor(liquidity, TWO_POW_96, currentSqrtP),
+        SafeCast.revToInt256(
+          FullMath.mulDivFloor(liquidity, TWO_POW_96, currentSqrtP),
         );
     }
 
@@ -358,6 +347,6 @@ export class SwapMath {
       returnedAmount = 0n;
     }
 
-    return BigInt.asIntN(256, returnedAmount);
+    return returnedAmount;
   }
 }
